@@ -2,9 +2,10 @@ package parser
 
 import (
 	"bufio"
+	"reflect"
 	"strings"
 	"testing"
-	"reflect"
+	"strconv"
 )
 
 func TestDeserializeSimpleString(t *testing.T) {
@@ -67,8 +68,8 @@ func TestDeserializeNullBulkString(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	if bs, ok := value.(BulkString); !ok || string(bs) != "" {
-		t.Errorf("Expected Null BulkString, got %v", value)
+	if value != nil {
+		t.Errorf("Expected nil BulkString, got %v", value)
 	}
 }
 
@@ -118,5 +119,86 @@ func TestDeserializeIncompleteBulkString(t *testing.T) {
 	_, err := Deserialize(r)
 	if err == nil {
 		t.Errorf("Expected error for incomplete bulk string, got nil")
+	}
+}
+
+func TestSerialize(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    Value
+		expected []byte
+		wantErr  bool
+	}{
+		{
+			name:     "SimpleString",
+			input:    SimpleString("OK"),
+			expected: []byte("+OK\r\n"),
+			wantErr:  false,
+		},
+		{
+			name:     "Error",
+			input:    Error("ERR something"),
+			expected: []byte("-ERR something\r\n"),
+			wantErr:  false,
+		},
+		{
+			name:     "Integer",
+			input:    Integer(123),
+			expected: []byte(":" + strconv.FormatInt(123, 10) + "\r\n"),
+			wantErr:  false,
+		},
+		{
+			name:     "BulkString non-nil",
+			input:    BulkString("hello"),
+			expected: []byte("$5\r\nhello\r\n"),
+			wantErr:  false,
+		},
+		{
+			name:     "BulkString nil",
+			input:    BulkString(nil),
+			expected: []byte("$-1\r\n"),
+			wantErr:  false,
+		},
+		{
+			name: "Array of mixed types",
+			input: Array{
+				SimpleString("OK"),
+				Integer(42),
+				BulkString("hi"),
+			},
+			expected: []byte("*3\r\n+OK\r\n:42\r\n$2\r\nhi\r\n"),
+			wantErr:  false,
+		},
+		{
+			name: "Nested Array",
+			input: Array{
+				SimpleString("A"),
+				Array{
+					Integer(1),
+					BulkString("nested"),
+				},
+			},
+			expected: []byte("*2\r\n+A\r\n*2\r\n:1\r\n$6\r\nnested\r\n"),
+			wantErr:  false,
+		},
+		{
+			name:     "Unknown type",
+			input:    3.14, // float64 is not supported
+			expected: nil,
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Serialize(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Serialize() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.expected) {
+				t.Errorf("Serialize() = %q, want %q", got, tt.expected)
+			}
+		})
 	}
 }

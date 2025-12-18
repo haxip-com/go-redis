@@ -58,7 +58,7 @@ func handleBulkString(r *bufio.Reader) (Value, error) {
 	}
 
 	if length == -1 {
-        return BulkString(make([]byte, 0)), nil // NULL bulk string
+        return nil, nil
     }
 
 	buf := make([]byte, length+2)
@@ -143,4 +143,32 @@ func Deserialize(r *bufio.Reader) (Value, error){
 	}
 	return result, nil
 
+}
+
+func Serialize(v Value) ([]byte, error) {
+	switch t := v.(type) {
+	case SimpleString:
+		return []byte("+" + string(t) + "\r\n"), nil
+	case Error:
+		return []byte("-" + string(t) + "\r\n"), nil
+	case Integer:
+		return []byte(":" + strconv.FormatInt(int64(t), 10) + "\r\n"), nil
+	case BulkString:
+		if t == nil {
+			return []byte("$-1\r\n"), nil
+		}
+		return []byte("$" + strconv.Itoa(len(t)) + "\r\n" + string(t) + "\r\n"), nil
+	case Array:
+		result := "*" + strconv.Itoa(len(t)) + "\r\n"
+		for _, elem := range t {
+			serialized, err := Serialize(elem)
+			if err != nil {
+				return nil, err
+			}
+			result += string(serialized)
+		}
+		return []byte(result), nil
+	default:
+		return nil, fmt.Errorf("unknown type %T", v)
+	}
 }
