@@ -1,0 +1,30 @@
+package main
+
+import "sync"
+
+type Store struct {
+	mu   sync.Mutex
+	data map[string][]byte
+}
+
+func newStore() *Store {
+	return &Store{data: make(map[string][]byte)}
+}
+
+func (s *Store) Get(key string) []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.data[key]
+}
+
+func (s *Store) Set(key string, val []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data[key] = val
+}
+
+func (s *Store) Del(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.data, key)
+}
