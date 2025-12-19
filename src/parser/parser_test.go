@@ -3,14 +3,15 @@ package parser
 import (
 	"bufio"
 	"reflect"
-	"strings"
+	"bytes"
 	"testing"
 	"strconv"
 )
 
 func TestDeserializeSimpleString(t *testing.T) {
-	input := "+OK\r\n"
-	r := bufio.NewReader(strings.NewReader(input))
+	input := []byte("+OK\r\n")
+	r := bufio.NewReader(bytes.NewReader(input))
+
 	value, err := Deserialize(r)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -22,8 +23,9 @@ func TestDeserializeSimpleString(t *testing.T) {
 }
 
 func TestDeserializeError(t *testing.T) {
-	input := "-ERR something went wrong\r\n"
-	r := bufio.NewReader(strings.NewReader(input))
+	input := []byte("-ERR something went wrong\r\n")
+	r := bufio.NewReader(bytes.NewReader(input))
+
 	value, err := Deserialize(r)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -35,8 +37,9 @@ func TestDeserializeError(t *testing.T) {
 }
 
 func TestDeserializeInteger(t *testing.T) {
-	input := ":123\r\n"
-	r := bufio.NewReader(strings.NewReader(input))
+	input := []byte(":123\r\n")
+	r := bufio.NewReader(bytes.NewReader(input))
+
 	value, err := Deserialize(r)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -48,8 +51,9 @@ func TestDeserializeInteger(t *testing.T) {
 }
 
 func TestDeserializeBulkString(t *testing.T) {
-	input := "$5\r\nhello\r\n"
-	r := bufio.NewReader(strings.NewReader(input))
+	input := []byte("$5\r\nhello\r\n")
+	r := bufio.NewReader(bytes.NewReader(input))
+
 	value, err := Deserialize(r)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -61,8 +65,9 @@ func TestDeserializeBulkString(t *testing.T) {
 }
 
 func TestDeserializeNullBulkString(t *testing.T) {
-	input := "$-1\r\n"
-	r := bufio.NewReader(strings.NewReader(input))
+	input := []byte("$-1\r\n")
+	r := bufio.NewReader(bytes.NewReader(input))
+
 	value, err := Deserialize(r)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -74,8 +79,9 @@ func TestDeserializeNullBulkString(t *testing.T) {
 }
 
 func TestDeserializeArray(t *testing.T) {
-	input := "*3\r\n:1\r\n:2\r\n:3\r\n"
-	r := bufio.NewReader(strings.NewReader(input))
+	input := []byte("*3\r\n:1\r\n:2\r\n:3\r\n")
+	r := bufio.NewReader(bytes.NewReader(input))
+
 	value, err := Deserialize(r)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -88,8 +94,9 @@ func TestDeserializeArray(t *testing.T) {
 }
 
 func TestDeserializeNestedArray(t *testing.T) {
-	input := "*2\r\n*2\r\n:1\r\n:2\r\n*2\r\n:3\r\n:4\r\n"
-	r := bufio.NewReader(strings.NewReader(input))
+	input := []byte("*2\r\n*2\r\n:1\r\n:2\r\n*2\r\n:3\r\n:4\r\n")
+	r := bufio.NewReader(bytes.NewReader(input))
+
 	value, err := Deserialize(r)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -99,14 +106,16 @@ func TestDeserializeNestedArray(t *testing.T) {
 		Array{Integer(1), Integer(2)},
 		Array{Integer(3), Integer(4)},
 	}
+
 	if !reflect.DeepEqual(value, expected) {
 		t.Errorf("Expected Nested Array %v, got %v", expected, value)
 	}
 }
 
 func TestDeserializeInvalidPrefix(t *testing.T) {
-	input := "?invalid\r\n"
-	r := bufio.NewReader(strings.NewReader(input))
+	input := []byte("?invalid\r\n")
+	r := bufio.NewReader(bytes.NewReader(input))
+
 	_, err := Deserialize(r)
 	if err == nil {
 		t.Errorf("Expected error for invalid prefix, got nil")
@@ -114,8 +123,9 @@ func TestDeserializeInvalidPrefix(t *testing.T) {
 }
 
 func TestDeserializeIncompleteBulkString(t *testing.T) {
-	input := "$5\r\nhi\r\n"
-	r := bufio.NewReader(strings.NewReader(input))
+	input := []byte("$5\r\nhi\r\n")
+	r := bufio.NewReader(bytes.NewReader(input))
+
 	_, err := Deserialize(r)
 	if err == nil {
 		t.Errorf("Expected error for incomplete bulk string, got nil")
@@ -200,5 +210,90 @@ func TestSerialize(t *testing.T) {
 				t.Errorf("Serialize() = %q, want %q", got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestSerializeFromStringSimple(t *testing.T) {
+	input := "PING"
+
+	got, err := SerializeFromString(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := []byte("*1\r\n$4\r\nPING\r\n")
+
+	if !bytes.Equal(got, expected) {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestSerializeFromStringMultipleArgs(t *testing.T) {
+	input := "SET mykey myvalue"
+
+	got, err := SerializeFromString(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := []byte(
+		"*3\r\n" +
+			"$3\r\nSET\r\n" +
+			"$5\r\nmykey\r\n" +
+			"$7\r\nmyvalue\r\n",
+	)
+
+	if !bytes.Equal(got, expected) {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestSerializeFromStringExtraSpaces(t *testing.T) {
+	input := "  SET   mykey    myvalue   "
+
+	got, err := SerializeFromString(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := []byte(
+		"*3\r\n" +
+			"$3\r\nSET\r\n" +
+			"$5\r\nmykey\r\n" +
+			"$7\r\nmyvalue\r\n",
+	)
+
+	if !bytes.Equal(got, expected) {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestSerializeFromStringEmpty(t *testing.T) {
+	input := ""
+
+	got, err := SerializeFromString(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := []byte("*0\r\n")
+
+	if !bytes.Equal(got, expected) {
+		t.Errorf("expected %q, got %q", expected, got)
+	}
+}
+
+func TestSerializeFromStringOnlySpaces(t *testing.T) {
+	input := "     "
+
+	got, err := SerializeFromString(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := []byte("*0\r\n")
+
+	if !bytes.Equal(got, expected) {
+		t.Errorf("expected %q, got %q", expected, got)
 	}
 }

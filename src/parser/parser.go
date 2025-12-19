@@ -172,3 +172,22 @@ func Serialize(v Value) ([]byte, error) {
 		return nil, fmt.Errorf("unknown type %T", v)
 	}
 }
+
+func SerializeFromString(s string) ([]byte, error) {
+
+	parts := strings.Fields(s)
+	values := make([]Value, len(parts))
+
+	for i := range values {		
+
+		values[i] = BulkString(parts[i])
+	}
+
+	serializedArray, err := Serialize(Array(values))
+
+	if err != nil {
+		return nil, fmt.Errorf("Error Serializing Array: %w", err)
+	}
+	return serializedArray, nil
+
+}
