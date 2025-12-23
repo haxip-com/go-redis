@@ -221,3 +221,25 @@ func TestMultipleConnections(t *testing.T) {
 		t.Errorf("expected 'value1', got %v", resp)
 	}
 }
+
+func TestClientDisconnect(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	reader := bufio.NewReader(conn)
+
+	sendCmd(t, conn, reader, "SET key val")
+	conn.Close()
+
+	time.Sleep(100 * time.Millisecond)
+
+	conn2, _ := net.Dial("tcp", srv.Addr())
+	defer conn2.Close()
+	reader2 := bufio.NewReader(conn2)
+
+	resp := sendCmd(t, conn2, reader2, "GET key")
+	if bs, ok := resp.(parser.BulkString); !ok || string(bs) != "val" {
+		t.Errorf("expected 'val', got %v", resp)
+	}
+}

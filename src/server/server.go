@@ -3,11 +3,19 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/haxip-com/go-redis/src/parser"
+)
+
+const (
+	SERVER_PORT      = "6379"
+	READ_TIMEOUT     = 5 * time.Minute
+	WRITE_TIMEOUT    = 10 * time.Second
 )
 
 type CommandHandler func(store *Store, args []parser.Value) parser.Value
@@ -76,14 +84,22 @@ func connHandler(conn net.Conn, store *Store) {
 	reader := bufio.NewReader(conn)
 
 	for {
+		conn.SetReadDeadline(time.Now().Add(READ_TIMEOUT))
 		value, err := parser.Deserialize(reader)
 		if err != nil {
+			if err == io.EOF {
+				return
+			}
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				return
+			}
 			return
 		}
 
 		arr, ok := value.(parser.Array)
 		if !ok || len(arr) == 0 {
 			reply, _ := parser.Serialize(parser.Error("ERR protocol error"))
+			conn.SetWriteDeadline(time.Now().Add(WRITE_TIMEOUT))
 			conn.Write(reply)
 			continue
 		}
@@ -91,6 +107,7 @@ func connHandler(conn net.Conn, store *Store) {
 		cmdName, ok := arr[0].(parser.BulkString)
 		if !ok {
 			reply, _ := parser.Serialize(parser.Error("ERR protocol error"))
+			conn.SetWriteDeadline(time.Now().Add(WRITE_TIMEOUT))
 			conn.Write(reply)
 			continue
 		}
@@ -99,28 +116,29 @@ func connHandler(conn net.Conn, store *Store) {
 		spec, exists := commands[cmd]
 		if !exists {
 			reply, _ := parser.Serialize(parser.Error(fmt.Sprintf("ERR unknown command '%s'", cmd)))
+			conn.SetWriteDeadline(time.Now().Add(WRITE_TIMEOUT))
 			conn.Write(reply)
 			continue
 		}
 
-		// Validate arity
 		if spec.arity > 0 && len(arr) != spec.arity {
 			reply, _ := parser.Serialize(parser.Error(fmt.Sprintf("ERR wrong number of arguments for '%s' command", cmd)))
+			conn.SetWriteDeadline(time.Now().Add(WRITE_TIMEOUT))
 			conn.Write(reply)
 			continue
 		} else if spec.arity < 0 && len(arr) < -spec.arity {
 			reply, _ := parser.Serialize(parser.Error(fmt.Sprintf("ERR wrong number of arguments for '%s' command", cmd)))
+			conn.SetWriteDeadline(time.Now().Add(WRITE_TIMEOUT))
 			conn.Write(reply)
 			continue
 		}
 
 		result := spec.handler(store, arr)
 		reply, _ := parser.Serialize(result)
+		conn.SetWriteDeadline(time.Now().Add(WRITE_TIMEOUT))
 		conn.Write(reply)
 	}
 }
-
-const SERVER_PORT = "6379"
 
 func main() {
 	log.Println("Starting server.")
