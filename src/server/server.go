@@ -6,85 +6,126 @@ import (
 	"log"
 	"net"
 	"strings"
+
+	"github.com/haxip-com/go-redis/src/parser"
 )
 
-const SERVER_PORT = "6379"
+type CommandHandler func(store *Store, args []parser.Value) parser.Value
 
-type Command int
-
-const (
-	ERROR Command = iota
-	PING
-	GET
-	SET
-	DEL
-)
-
-func parseCommand(buf string) (Command, []string, error) {
-	buf = strings.TrimSpace(buf)
-	if buf == "" {
-		return ERROR, nil, fmt.Errorf("empty command")
-	}
-	parts := strings.Split(buf, " ")
-	command := strings.ToUpper(parts[0])
-	args := parts[1:]
-
-	// check if command is emtpy
-	switch command {
-	case "PING":
-		return PING, nil, nil
-	case "GET":
-		return GET, args, nil
-	case "SET":
-		return SET, args, nil
-	case "DEL":
-		return DEL, args, nil
-	default:
-		return ERROR, nil, fmt.Errorf("unknown command: %s", command)
-	}
+type CommandSpec struct {
+	handler CommandHandler
+	arity   int // positive = exact, negative = minimum (abs(arity)-1)
 }
 
-func connHandler(conn net.Conn, mem *Store) {
+var commands = map[string]CommandSpec{
+	"PING": {handlePing, 1},
+	"ECHO": {handleEcho, 2},
+	"GET":  {handleGet, 2},
+	"SET":  {handleSet, 3},
+	"DEL":  {handleDel, -2},
+}
+
+func handlePing(store *Store, args []parser.Value) parser.Value {
+	return parser.SimpleString("PONG")
+}
+
+func handleEcho(store *Store, args []parser.Value) parser.Value {
+	if bs, ok := args[1].(parser.BulkString); ok {
+		return bs
+	}
+	return parser.Error("ERR wrong argument type")
+}
+
+func handleGet(store *Store, args []parser.Value) parser.Value {
+	bs, ok := args[1].(parser.BulkString)
+	if !ok {
+		return parser.Error("ERR wrong argument type")
+	}
+	val, exists := store.Get(string(bs))
+	if !exists {
+		return parser.BulkString(nil)
+	}
+	return parser.BulkString(val)
+}
+
+func handleSet(store *Store, args []parser.Value) parser.Value {
+	key, ok1 := args[1].(parser.BulkString)
+	val, ok2 := args[2].(parser.BulkString)
+	if !ok1 || !ok2 {
+		return parser.Error("ERR wrong argument type")
+	}
+	store.Set(string(key), []byte(val))
+	return parser.SimpleString("OK")
+}
+
+func handleDel(store *Store, args []parser.Value) parser.Value {
+	keys := make([]string, 0, len(args)-1)
+	for i := 1; i < len(args); i++ {
+		if bs, ok := args[i].(parser.BulkString); ok {
+			keys = append(keys, string(bs))
+		} else {
+			return parser.Error("ERR wrong argument type")
+		}
+	}
+	count := store.Del(keys...)
+	return parser.Integer(count)
+}
+
+func connHandler(conn net.Conn, store *Store) {
 	defer conn.Close()
-	reciever := bufio.NewReader(conn)
+	reader := bufio.NewReader(conn)
 
 	for {
-		mess, err := reciever.ReadString('\n')
+		value, err := parser.Deserialize(reader)
 		if err != nil {
 			return
 		}
 
-		cmd, args, err := parseCommand(mess)
-		if err != nil || cmd == ERROR {
-			log.Printf("Parse error: %v", err)
-			fmt.Fprintf(conn, "Parse error\n")
+		arr, ok := value.(parser.Array)
+		if !ok || len(arr) == 0 {
+			reply, _ := parser.Serialize(parser.Error("ERR protocol error"))
+			conn.Write(reply)
 			continue
 		}
 
-		switch cmd {
-		case PING:
-			fmt.Fprintf(conn, "Pong\n")
-		case GET:
-			key := args[0]
-			val := mem.Get(key)
-			fmt.Fprintf(conn, "%v\n", val)
-		case SET:
-			key := args[0]
-			val := args[1]
-			mem.Set(key, []byte(val))
-			fmt.Fprintf(conn, "DONE\n")
-		case DEL:
-			key := args[0]
-			mem.Del(key)
-			fmt.Fprintf(conn, "DONE\n")
+		cmdName, ok := arr[0].(parser.BulkString)
+		if !ok {
+			reply, _ := parser.Serialize(parser.Error("ERR protocol error"))
+			conn.Write(reply)
+			continue
 		}
+
+		cmd := strings.ToUpper(string(cmdName))
+		spec, exists := commands[cmd]
+		if !exists {
+			reply, _ := parser.Serialize(parser.Error(fmt.Sprintf("ERR unknown command '%s'", cmd)))
+			conn.Write(reply)
+			continue
+		}
+
+		// Validate arity
+		if spec.arity > 0 && len(arr) != spec.arity {
+			reply, _ := parser.Serialize(parser.Error(fmt.Sprintf("ERR wrong number of arguments for '%s' command", cmd)))
+			conn.Write(reply)
+			continue
+		} else if spec.arity < 0 && len(arr) < -spec.arity {
+			reply, _ := parser.Serialize(parser.Error(fmt.Sprintf("ERR wrong number of arguments for '%s' command", cmd)))
+			conn.Write(reply)
+			continue
+		}
+
+		result := spec.handler(store, arr)
+		reply, _ := parser.Serialize(result)
+		conn.Write(reply)
 	}
 }
+
+const SERVER_PORT = "6379"
 
 func main() {
 	log.Println("Starting server.")
 
-	mem := newStore()
+	store := newStore()
 
 	listener, err := net.Listen("tcp", ":"+SERVER_PORT)
 	if err != nil {
@@ -97,6 +138,6 @@ func main() {
 			log.Println("Error accepting connection:", err)
 			continue
 		}
-		go connHandler(conn, mem)
+		go connHandler(conn, store)
 	}
 }

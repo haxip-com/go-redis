@@ -11,10 +11,11 @@ func newStore() *Store {
 	return &Store{data: make(map[string][]byte)}
 }
 
-func (s *Store) Get(key string) []byte {
+func (s *Store) Get(key string) ([]byte, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.data[key]
+	val, exists := s.data[key]
+	return val, exists
 }
 
 func (s *Store) Set(key string, val []byte) {
@@ -23,8 +24,15 @@ func (s *Store) Set(key string, val []byte) {
 	s.data[key] = val
 }
 
-func (s *Store) Del(key string) {
+func (s *Store) Del(keys ...string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.data, key)
+	count := 0
+	for _, key := range keys {
+		if _, exists := s.data[key]; exists {
+			delete(s.data, key)
+			count++
+		}
+	}
+	return count
 }
