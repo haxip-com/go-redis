@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	SERVER_PORT      = "6379"
-	READ_TIMEOUT     = 5 * time.Minute
-	WRITE_TIMEOUT    = 10 * time.Second
+	SERVER_PORT   = "6379"
+	READ_TIMEOUT  = 5 * time.Minute
+	WRITE_TIMEOUT = 10 * time.Second
 )
 
 type CommandHandler func(store *Store, args []parser.Value) parser.Value
@@ -31,6 +31,8 @@ var commands = map[string]CommandSpec{
 	"GET":  {handleGet, 2},
 	"SET":  {handleSet, 3},
 	"DEL":  {handleDel, -2},
+	"INCR": {handleIncr, 2},
+	"DECR": {handleDecr, 2},
 }
 
 func handlePing(store *Store, args []parser.Value) parser.Value {
@@ -77,6 +79,32 @@ func handleDel(store *Store, args []parser.Value) parser.Value {
 	}
 	count := store.Del(keys...)
 	return parser.Integer(count)
+}
+
+func handleIncr(store *Store, args []parser.Value) parser.Value {
+	key, ok := args[1].(parser.BulkString)
+	if !ok {
+		return parser.Error("ERR wrong argument type")
+	}
+
+	newVal, err := store.Incr(string(key))
+	if err != nil {
+		return parser.Error(err.Error())
+	}
+	return parser.Integer(newVal)
+}
+
+func handleDecr(store *Store, args []parser.Value) parser.Value {
+	key, ok := args[1].(parser.BulkString)
+	if !ok {
+		return parser.Error("ERR wrong argument type")
+	}
+
+	newVal, err := store.Decr(string(key))
+	if err != nil {
+		return parser.Error(err.Error())
+	}
+	return parser.Integer(newVal)
 }
 
 func connHandler(conn net.Conn, store *Store) {
