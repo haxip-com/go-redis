@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  push:
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
@@ -26,7 +28,7 @@ jobs:
         flags: unittests
     
     - name: Build server
-      run: go build -o redis-server ./cmd/server
+      run: go build -o redis-server ./src/server
     
     - name: Start server
       run: ./redis-server &
