@@ -243,3 +243,88 @@ func TestClientDisconnect(t *testing.T) {
 		t.Errorf("expected 'val', got %v", resp)
 	}
 }
+
+func TestIncr(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	resp := sendCmd(t, conn, reader, "INCR counter")
+	if num, ok := resp.(parser.Integer); !ok || num != 1 {
+		t.Errorf("expected 1, got %v", resp)
+	}
+
+	resp = sendCmd(t, conn, reader, "INCR counter")
+	if num, ok := resp.(parser.Integer); !ok || num != 2 {
+		t.Errorf("expected 2, got %v", resp)
+	}
+}
+
+func TestDecr(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	resp := sendCmd(t, conn, reader, "DECR counter")
+	if num, ok := resp.(parser.Integer); !ok || num != -1 {
+		t.Errorf("expected -1, got %v", resp)
+	}
+
+	resp = sendCmd(t, conn, reader, "DECR counter")
+	if num, ok := resp.(parser.Integer); !ok || num != -2 {
+		t.Errorf("expected -2, got %v", resp)
+	}
+}
+
+func TestIncrStringValue(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	sendCmd(t, conn, reader, "SET num 10")
+	resp := sendCmd(t, conn, reader, "INCR num")
+	if num, ok := resp.(parser.Integer); !ok || num != 11 {
+		t.Errorf("expected 11, got %v", resp)
+	}
+}
+
+func TestIncrInvalidValue(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	sendCmd(t, conn, reader, "SET key notanumber")
+	resp := sendCmd(t, conn, reader, "INCR key")
+	if err, ok := resp.(parser.Error); !ok || !bytes.Contains([]byte(err), []byte("not an integer")) {
+		t.Errorf("expected integer error, got %v", resp)
+	}
+}
+
+func TestIncrGetReturnsString(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	sendCmd(t, conn, reader, "INCR counter")
+	sendCmd(t, conn, reader, "INCR counter")
+
+	resp := sendCmd(t, conn, reader, "GET counter")
+	if bs, ok := resp.(parser.BulkString); !ok || string(bs) != "2" {
+		t.Errorf("expected '2', got %v", resp)
+	}
+}

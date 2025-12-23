@@ -155,3 +155,86 @@ func TestStoreConcurrentDeletes(t *testing.T) {
 		t.Errorf("expected at most 1 deletion, got %d", totalDeleted)
 	}
 }
+
+func TestStoreIncr(t *testing.T) {
+	store := newStore()
+	val, err := store.Incr("counter")
+	if err != nil || val != 1 {
+		t.Errorf("expected 1, got %d, err: %v", val, err)
+	}
+
+	val, err = store.Incr("counter")
+	if err != nil || val != 2 {
+		t.Errorf("expected 2, got %d, err: %v", val, err)
+	}
+}
+
+func TestStoreDecr(t *testing.T) {
+	store := newStore()
+	val, err := store.Decr("counter")
+	if err != nil || val != -1 {
+		t.Errorf("expected -1, got %d, err: %v", val, err)
+	}
+
+	val, err = store.Decr("counter")
+	if err != nil || val != -2 {
+		t.Errorf("expected -2, got %d, err: %v", val, err)
+	}
+}
+
+func TestStoreIncrBy(t *testing.T) {
+	store := newStore()
+	val, err := store.IncrBy("counter", 5)
+	if err != nil || val != 5 {
+		t.Errorf("expected 5, got %d, err: %v", val, err)
+	}
+
+	val, err = store.IncrBy("counter", 10)
+	if err != nil || val != 15 {
+		t.Errorf("expected 15, got %d, err: %v", val, err)
+	}
+
+	val, err = store.IncrBy("counter", -3)
+	if err != nil || val != 12 {
+		t.Errorf("expected 12, got %d, err: %v", val, err)
+	}
+}
+
+func TestStoreIncrStringValue(t *testing.T) {
+	store := newStore()
+	store.Set("num", []byte("10"))
+
+	val, err := store.Incr("num")
+	if err != nil || val != 11 {
+		t.Errorf("expected 11, got %d, err: %v", val, err)
+	}
+}
+
+func TestStoreIncrInvalidString(t *testing.T) {
+	store := newStore()
+	store.Set("key", []byte("notanumber"))
+
+	_, err := store.Incr("key")
+	if err == nil {
+		t.Error("expected error for non-integer value")
+	}
+}
+
+func TestStoreConcurrentIncr(t *testing.T) {
+	store := newStore()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			store.Incr("counter")
+		}()
+	}
+	wg.Wait()
+
+	val, _ := store.Get("counter")
+	if string(val) != "100" {
+		t.Errorf("expected '100', got '%s'", val)
+	}
+}
