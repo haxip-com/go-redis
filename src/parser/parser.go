@@ -95,6 +95,25 @@ func handleArray(r *bufio.Reader) (Value, error) {
 	return Array(returnValues), nil
 }
 
+func handleInline(r *bufio.Reader, firstByte byte) (Value, error) {
+    line, err := r.ReadString('\n')
+    if err != nil {
+        return nil, err
+    }
+    // prepend first byte that was already read
+    line = string(firstByte) + line
+    line = strings.TrimSuffix(line, "\r\n")
+    tokens := strings.Fields(line)
+    if len(tokens) == 0 {
+        return nil, errors.New("empty inline command")
+    }
+
+	returnArr := []Value{}
+	returnArr = append(returnArr, SimpleString(tokens[0]))
+    // return only the command name for now
+    return Array(returnArr), nil
+}
+
 func handleCommand(prefix byte, r *bufio.Reader) (Value, error) {
 
 	switch prefix {
@@ -126,7 +145,7 @@ func handleCommand(prefix byte, r *bufio.Reader) (Value, error) {
 		return result, nil
 	
 	default:
-		return nil, errors.New("undefined prefix")
+		return handleInline(r, prefix)
 
 	}
 }
@@ -190,4 +209,28 @@ func SerializeFromString(s string) ([]byte, error) {
 	}
 	return serializedArray, nil
 
+}
+
+func unwrap(v Value)  {
+    switch val := v.(type) {
+    case SimpleString:
+        fmt.Println(string(val))
+
+    case Error:
+        fmt.Println(string(val))
+
+    case Integer:
+        fmt.Println(int64(val))
+
+    case BulkString:
+        fmt.Println(string([]byte(val)))
+
+    case Array:
+		for _, elem := range val {
+    		unwrap(elem)
+		}
+
+    default:
+        break
+    }
 }

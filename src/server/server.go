@@ -33,6 +33,7 @@ var commands = map[string]CommandSpec{
 	"DEL":  {handleDel, -2},
 	"INCR": {handleIncr, 2},
 	"DECR": {handleDecr, 2},
+	"CONFIG": {handleConfig,-2},
 }
 
 func handlePing(store *Store, args []parser.Value) parser.Value {
@@ -107,6 +108,18 @@ func handleDecr(store *Store, args []parser.Value) parser.Value {
 	return parser.Integer(newVal)
 }
 
+func handleConfig(store *Store, args []parser.Value) parser.Value {
+	if s, ok := args[0].(parser.BulkString); ok && string(s) == "CONFIG" {
+        // Accept any number of arguments, or ignore them for benchmarking
+		arr := []parser.Value{
+			parser.BulkString("maxmemory"),
+			parser.BulkString("0"),
+		}
+		return parser.Array(arr)
+    }
+	return parser.Error("ERR invalid format")
+}
+
 func connHandler(conn net.Conn, store *Store) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
@@ -120,10 +133,11 @@ func connHandler(conn net.Conn, store *Store) {
 			}
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				return
-			}
+			}	
 			return
+			
 		}
-
+		
 		arr, ok := value.(parser.Array)
 		if !ok || len(arr) == 0 {
 			reply, _ := parser.Serialize(parser.Error("ERR protocol error"))
@@ -132,8 +146,13 @@ func connHandler(conn net.Conn, store *Store) {
 			continue
 		}
 
-		cmdName, ok := arr[0].(parser.BulkString)
-		if !ok {
+		var cmdName string
+		switch v := arr[0].(type) {
+		case parser.BulkString:
+			cmdName = string(v)
+		case parser.SimpleString:
+			cmdName = string(v)
+		default:
 			reply, _ := parser.Serialize(parser.Error("ERR protocol error"))
 			conn.SetWriteDeadline(time.Now().Add(WRITE_TIMEOUT))
 			conn.Write(reply)
@@ -164,7 +183,11 @@ func connHandler(conn net.Conn, store *Store) {
 		result := spec.handler(store, arr)
 		reply, _ := parser.Serialize(result)
 		conn.SetWriteDeadline(time.Now().Add(WRITE_TIMEOUT))
-		conn.Write(reply)
+		fmt.Println("writing to conn")
+		if _, err := conn.Write(reply); err != nil {
+    		log.Println("write error:", err)
+    		return
+		}
 	}
 }
 
@@ -185,5 +208,6 @@ func main() {
 			continue
 		}
 		go connHandler(conn, store)
+		
 	}
 }
