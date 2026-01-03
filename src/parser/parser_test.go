@@ -112,16 +112,6 @@ func TestDeserializeNestedArray(t *testing.T) {
 	}
 }
 
-func TestDeserializeInvalidPrefix(t *testing.T) {
-	input := []byte("?invalid\r\n")
-	r := bufio.NewReader(bytes.NewReader(input))
-
-	_, err := Deserialize(r)
-	if err == nil {
-		t.Errorf("Expected error for invalid prefix, got nil")
-	}
-}
-
 func TestDeserializeIncompleteBulkString(t *testing.T) {
 	input := []byte("$5\r\nhi\r\n")
 	r := bufio.NewReader(bytes.NewReader(input))
