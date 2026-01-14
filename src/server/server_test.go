@@ -6,7 +6,6 @@ import (
 	"net"
 	"testing"
 	"time"
-
 	"github.com/haxip-com/go-redis/src/parser"
 )
 
@@ -328,3 +327,149 @@ func TestIncrGetReturnsString(t *testing.T) {
 		t.Errorf("expected '2', got %v", resp)
 	}
 }
+
+func TestExpire(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	resp1 := sendCmd(t, conn, reader, "SET mykey myvalue")
+	if str, ok := resp1.(parser.SimpleString); !ok || str != "OK" {
+		t.Errorf("expected OK, got %v", resp1)
+	}
+	resp := sendCmd(t, conn, reader, "EXPIRE mykey 2")
+	if _, ok := resp.(parser.Integer); !ok  {
+		t.Errorf("expected OK, got %v", resp1)
+	}
+	i64 := int64(resp.(parser.Integer))
+	if i64 != 1 {
+		t.Errorf("expected 1, got %v", i64)
+	}
+	_, ok := srv.store.volatileKeyMap.data["mykey"]
+    if !ok {
+        t.Fatalf("expected key %q to exist in volatileKeyMap", "mykey")
+    }
+	time.Sleep(1 * time.Second)
+	_, stillThere := srv.store.volatileKeyMap.data["mykey"]
+    if !stillThere {
+        t.Fatalf("expected key %q to stil exists in volatileKeyMap", "mykey")
+    }
+	time.Sleep(1 * time.Second)
+	_, notExpired := srv.store.volatileKeyMap.data["mykey"]
+    if !notExpired {
+        t.Fatalf("expected key %q to have been expired in volatileKeyMap", "mykey")
+    }
+	//GET should not let me access it now as it is expired
+	res := sendCmd(t, conn, reader, "GET mykey")
+	if res != nil {
+		t.Errorf("expected nil, got %v", resp)
+	}
+}
+
+func TestExpireNX(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	sendCmd(t, conn, reader, "SET mykey myvalue")
+
+	// Case 1: key has no expiration -> should set
+	resp := sendCmd(t, conn, reader, "EXPIRE mykey 10 NX")
+	if i, ok := resp.(parser.Integer); !ok || i != 1 {
+		t.Fatalf("expected 1, got %v", resp)
+	}
+
+	// Case 2: key already has expiration -> should not set
+	resp2 := sendCmd(t, conn, reader, "EXPIRE mykey 20 NX")
+	if i, ok := resp2.(parser.Integer); !ok || i != 0 {
+		t.Fatalf("expected 0, got %v", resp2)
+	}
+}
+
+func TestExpireXX(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	sendCmd(t, conn, reader, "SET mykey myvalue")
+
+	// Case 1: key has no expiration -> should not set
+	resp := sendCmd(t, conn, reader, "EXPIRE mykey 10 XX")
+	if i, ok := resp.(parser.Integer); !ok || i != 0 {
+		t.Fatalf("expected 0, got %v", resp)
+	}
+
+	// Case 2: key already has expiration -> should set
+	resp2 := sendCmd(t, conn, reader, "EXPIRE mykey 20 NX")
+	if i, ok := resp2.(parser.Integer); !ok || i != 1 {
+		t.Fatalf("expected 1, got %v", resp2)
+	}
+}
+
+func TestExpireGT(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	sendCmd(t, conn, reader, "SET mykey myvalue")
+
+	// Case 0: key has no expiration -> set to 10 seconds
+	keyset := sendCmd(t, conn, reader, "EXPIRE mykey 10")
+	if i, ok := keyset.(parser.Integer); !ok || i != 1 {
+		t.Fatalf("expected 1, got %v", keyset)
+	}
+
+	// Case 1: set again with higher expiration -> should set
+	resp := sendCmd(t, conn, reader, "EXPIRE mykey 15 GT")
+	if i, ok := resp.(parser.Integer); !ok || i != 1 {
+		t.Fatalf("expected 1, got %v", resp)
+	}
+
+	// Case 2: set again with Lower Expiration -> should not  set
+	resp2 := sendCmd(t, conn, reader, "EXPIRE mykey 5 GT")
+	if i, ok := resp2.(parser.Integer); !ok || i != 0 {
+		t.Fatalf("expected 0, got %v", resp2)
+	}
+}
+
+func TestExpireLT(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	sendCmd(t, conn, reader, "SET mykey myvalue")
+
+	// Case 0: key has no expiration -> set to 10 seconds
+	keyset := sendCmd(t, conn, reader, "EXPIRE mykey 10")
+	if i, ok := keyset.(parser.Integer); !ok || i != 1 {
+		t.Fatalf("expected 1, got %v", keyset)
+	}
+
+	// Case 1: set again with higher expiration -> should not set
+	resp := sendCmd(t, conn, reader, "EXPIRE mykey 15 LT")
+	if i, ok := resp.(parser.Integer); !ok || i != 0 {
+		t.Fatalf("expected 0, got %v", resp)
+	}
+
+	// Case 2: set again with Lower Expiration -> should set
+	resp2 := sendCmd(t, conn, reader, "EXPIRE mykey 5 LT")
+	if i, ok := resp2.(parser.Integer); !ok || i != 1 {
+		t.Fatalf("expected 1, got %v", resp2)
+	}
+}
+
