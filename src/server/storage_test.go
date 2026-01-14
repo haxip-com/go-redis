@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestStoreSetGet(t *testing.T) {
@@ -238,3 +240,181 @@ func TestStoreConcurrentIncr(t *testing.T) {
 		t.Errorf("expected '100', got '%s'", val)
 	}
 }
+
+func TestIsVolatile(t *testing.T) {
+	store := &Store{}
+	store.volatileKeyMap.data = make(map[string]TimeEvent)
+
+	// key does not exist
+	if store.isVolatile("missing") {
+		t.Fatalf("expected false for non-volatile key")
+	}
+
+	// add key
+	store.volatileKeyMap.data["volatile"] = TimeEvent{expiryTime: time.Now(), timeToLive: time.Duration(time.Minute * 5)}
+
+	if !store.isVolatile("volatile") {
+		t.Fatalf("expected true for volatile key")
+	}
+}
+
+func newTTLMap() *TTLMap {
+	return &TTLMap{
+		data: make(map[string]TimeEvent),
+	}
+}
+
+func TestTTLMapGetExpiry(t *testing.T) {
+	m := newTTLMap()
+	ttl := 100 * time.Millisecond
+
+	m.Set("key", ttl)
+
+	expiry, err := m.GetExpiry("key")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if expiry.Before(time.Now()) {
+		t.Fatalf("expiry should be in the future")
+	}
+}
+
+func TestTTLMapGetExpiryMissingKey(t *testing.T) {
+	m := newTTLMap()
+
+	_, err := m.GetExpiry("missing")
+	if err == nil {
+		t.Fatalf("expected error for missing key")
+	}
+}
+
+func TestTTLMapGetDuration(t *testing.T) {
+	m := newTTLMap()
+	ttl := 200 * time.Millisecond
+
+	m.Set("key", ttl)
+
+	d, err := m.GetDuration("key")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if d != ttl {
+		t.Fatalf("expected duration %v, got %v", ttl, d)
+	}
+}
+
+func TestTTLMapGetDurationMissingKey(t *testing.T) {
+	m := newTTLMap()
+
+	_, err := m.GetDuration("missing")
+	if err == nil {
+		t.Fatalf("expected error for missing key")
+	}
+}
+
+func TestTTLMapIsValidTrue(t *testing.T) {
+	m := newTTLMap()
+	m.Set("key", time.Second)
+
+	if !m.IsValid("key") {
+		t.Fatalf("expected key to be valid")
+	}
+}
+
+func TestTTLMapIsValidExpired(t *testing.T) {
+	m := newTTLMap()
+	m.Set("key", 10*time.Millisecond)
+
+	time.Sleep(20 * time.Millisecond)
+
+	if m.IsValid("key") {
+		t.Fatalf("expected key to be expired")
+	}
+
+	// ensure expired key is deleted
+	if _, ok := m.data["key"]; ok {
+		t.Fatalf("expected expired key to be removed")
+	}
+}
+
+func TestTTLMapIsValidMissingKey(t *testing.T) {
+	m := newTTLMap()
+
+	if m.IsValid("missing") {
+		t.Fatalf("expected false for missing key")
+	}
+}
+
+func TestIsVolatileRace(t *testing.T) {
+	store := &Store{}
+	store.volatileKeyMap.data = make(map[string]TimeEvent)
+
+	var wg sync.WaitGroup
+
+	// writers
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := fmt.Sprintf("key-%d", i)
+			for j := 0; j < 1000; j++ {
+				store.volatileKeyMap.mu.Lock()
+				store.volatileKeyMap.data[key] = TimeEvent{expiryTime: time.Now().Add(time.Minute), timeToLive: time.Minute}
+				store.volatileKeyMap.mu.Unlock()
+			}
+		}(i)
+	}
+
+	// readers
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := fmt.Sprintf("key-%d", i)
+			for j := 0; j < 1000; j++ {
+				_ = store.isVolatile(key)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+func TestTTLMapConcurrentAccessRace(t *testing.T) {
+	m := newTTLMap()
+	var wg sync.WaitGroup
+
+	// writers
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := fmt.Sprintf("key-%d", i)
+			for j := 0; j < 1000; j++ {
+				m.Set(key, time.Second)
+			}
+		}(i)
+	}
+
+	// readers
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := fmt.Sprintf("key-%d", i)
+			for j := 0; j < 1000; j++ {
+				m.GetExpiry(key)
+				m.GetDuration(key)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+
+
+
+
