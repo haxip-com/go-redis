@@ -8,14 +8,16 @@ import (
 	
 )
 
-type TimeEvent struct {
+type ExpirationTime struct {
     expiryTime time.Time
-    timeToLive time.Duration
+    durationSet time.Duration
 }
+
+type expirationSetter func(key string)
 
 type TTLMap struct {
     mu   sync.RWMutex
-    data map[string]TimeEvent
+    data map[string]ExpirationTime
 }
 
 
@@ -26,7 +28,7 @@ type Store struct {
 }
 
 func newStore() *Store {
-	return &Store{data: make(map[string]interface{}), volatileKeyMap: TTLMap{data: make(map[string]TimeEvent)}}
+	return &Store{data: make(map[string]interface{}), volatileKeyMap: TTLMap{data: make(map[string]ExpirationTime)}}
 }
 
 func WrapValue(val interface{}) ([]byte, bool) {
@@ -42,24 +44,20 @@ func WrapValue(val interface{}) ([]byte, bool) {
 
 func (s *Store) Get(key string) ([]byte, bool) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	val, exists := s.data[key]
+	s.mu.RUnlock()
+
 	if !exists {
-		return nil, false
+    	return nil, false
 	}
-	switch s.isVolatile(key){
-	case true:
-		if s.volatileKeyMap.IsValid(key){
-			res, wrapped := WrapValue(val)
-			return res, wrapped
-		} else {
-			return nil, false
-		}
-	case false:
-		res, wrapped := WrapValue(val)
-		return res, wrapped
+	// Only delete after RLock released
+	if s.isVolatile(key) && !s.volatileKeyMap.IsValid(key) {
+    	defer func() {
+        	s.Del(key)
+    	}()
+    	return nil, false
 	}
-	return nil, false
+	return WrapValue(val)
 }
 
 func (s *Store) Set(key string, val []byte) {
@@ -128,19 +126,60 @@ func (s *Store) isVolatile(key string) bool {
 	return true
 }
 
-func (m *TTLMap) Set(key string, ttl time.Duration) {
-    m.mu.Lock()
-    defer m.mu.Unlock()
+func (m *TTLMap) setExpiration(key string, exp ExpirationTime) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-    m.data[key] = TimeEvent{
-		expiryTime: time.Now().Add(ttl),
-		timeToLive: ttl,
+	m.data[key] = exp
+}
+
+func withUnixExpiry(m *TTLMap, t time.Time) (expirationSetter, time.Duration) {
+	d := t.Sub(time.Now())
+	return func(key string) {
+		m.setExpiration(key, ExpirationTime{
+			expiryTime:  t,
+			durationSet: d,
+		})
+	}, d
+}
+
+func withTTL(m *TTLMap, ttl time.Duration) expirationSetter {
+	return func(key string) {
+		m.setExpiration(key, ExpirationTime{
+			expiryTime:  time.Now().Add(ttl),
+			durationSet: ttl,
+		})
 	}
+}
+
+
+func (m *TTLMap) unixSet(key string, expiryTime time.Time) {
+	m.setExpiration(key, ExpirationTime{
+		expiryTime:  expiryTime,
+		durationSet: expiryTime.Sub(time.Now()),
+	})
+}
+
+func (m *TTLMap) Set(key string, ttl time.Duration) {
+	m.setExpiration(key, ExpirationTime{
+		expiryTime:  time.Now().Add(ttl),
+		durationSet: ttl,
+	})
+}
+
+func (m *TTLMap) apply(key string, set expirationSetter) {
+	set(key)
 }
 
 func (m *TTLMap) Delete(key string) {
     m.mu.Lock()
     defer m.mu.Unlock()
+
+	_, ok := m.data[key]
+
+	if !ok {
+        return
+    }
 
     delete(m.data, key)
 }
@@ -163,7 +202,7 @@ func (m *TTLMap) GetDuration(key string) (time.Duration, error) {
 	if !ok {
         return time.Duration(0), fmt.Errorf("Key does not have a TTL or does not exist")
     }
-	Duration := timeEvent.timeToLive
+	Duration := timeEvent.durationSet
 	return Duration, nil
 }
 
@@ -177,7 +216,7 @@ func (m *TTLMap) IsValid(key string) bool {
     }
 	expiry := TimeEvent.expiryTime
 
-    if time.Now().After(expiry) {
+    if !time.Now().Before(expiry) {
         delete(m.data, key)
         return false
     }

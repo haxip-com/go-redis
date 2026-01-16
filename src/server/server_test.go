@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"net"
+	"strconv"
 	"testing"
 	"time"
 	"github.com/haxip-com/go-redis/src/parser"
@@ -348,24 +349,19 @@ func TestExpire(t *testing.T) {
 	if i64 != 1 {
 		t.Errorf("expected 1, got %v", i64)
 	}
-	_, ok := srv.store.volatileKeyMap.data["mykey"]
+	val, ok := srv.store.volatileKeyMap.data["mykey"]
     if !ok {
         t.Fatalf("expected key %q to exist in volatileKeyMap", "mykey")
     }
-	time.Sleep(1 * time.Second)
-	_, stillThere := srv.store.volatileKeyMap.data["mykey"]
-    if !stillThere {
-        t.Fatalf("expected key %q to stil exists in volatileKeyMap", "mykey")
+	if int64(val.durationSet.Seconds()) != int64(2) {
+        t.Fatalf("expected key %q to have expiretime 2, got %f", "mykey", val.durationSet.Seconds())
     }
-	time.Sleep(1 * time.Second)
-	_, notExpired := srv.store.volatileKeyMap.data["mykey"]
-    if !notExpired {
-        t.Fatalf("expected key %q to have been expired in volatileKeyMap", "mykey")
-    }
+	//set the expiry to now
+	srv.store.volatileKeyMap.data["mykey"] = ExpirationTime{expiryTime: time.Now().Add(-time.Millisecond), durationSet: time.Millisecond} 
 	//GET should not let me access it now as it is expired
 	res := sendCmd(t, conn, reader, "GET mykey")
 	if res != nil {
-		t.Errorf("expected nil, got %v", resp)
+		t.Errorf("expected nil, got %v", res)
 	}
 }
 
@@ -472,4 +468,174 @@ func TestExpireLT(t *testing.T) {
 		t.Fatalf("expected 1, got %v", resp2)
 	}
 }
+
+func TestExpireUnix(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	resp1 := sendCmd(t, conn, reader, "SET mykey myvalue")
+	if str, ok := resp1.(parser.SimpleString); !ok || str != "OK" {
+		t.Errorf("expected OK, got %v", resp1)
+	}
+	_unixtime := time.Now().Add(time.Second * 2).Unix()
+	resp := sendCmd(t, conn, reader, "EXPIREAT mykey " + strconv.FormatInt(_unixtime, 10))
+	i64 := int64(resp.(parser.Integer))
+	if i64 != 1 {
+		t.Errorf("expected 1, got %v", i64)
+	}
+	val, ok := srv.store.volatileKeyMap.data["mykey"]
+    if !ok {
+        t.Fatalf("expected key %q to exist in volatileKeyMap", "mykey")
+    }
+	if val.expiryTime.Unix() != _unixtime {
+        t.Fatalf("expected key %q to have expiretime %d, got %d", "mykey",  _unixtime, val.expiryTime.Unix())
+    }
+	//set the expiry to now
+	srv.store.volatileKeyMap.data["mykey"] = ExpirationTime{expiryTime: time.Now().Add(-time.Millisecond), durationSet: time.Millisecond} 
+	//GET should not let me access it now as it is expired
+	res := sendCmd(t, conn, reader, "GET mykey")
+	if res != nil {
+		t.Errorf("expected nil, got %v", resp)
+	}
+}
+
+func TestExpireUnixNX(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	resp1 := sendCmd(t, conn, reader, "SET mykey myvalue")
+	if str, ok := resp1.(parser.SimpleString); !ok || str != "OK" {
+		t.Errorf("expected OK, got %v", resp1)
+	}
+	_unixtime := time.Now().Add(time.Second * 5).Unix()
+	//case 1: no expiretime set -> should set
+	resp := sendCmd(t, conn, reader, "EXPIREAT mykey " + strconv.FormatInt(_unixtime, 10) +" NX")
+
+	i64 := int64(resp.(parser.Integer))
+	if i64 != 1 {
+		t.Errorf("expected 1, got %v", i64)
+	}
+	// case 2: expiretime already set -> should not set
+	resp2 := sendCmd(t, conn, reader, "EXPIREAT mykey " + strconv.FormatInt(_unixtime, 10) +" NX")
+	ret_code := int64(resp2.(parser.Integer))
+	if ret_code != 0 {
+		t.Errorf("expected 0, got %v", i64)
+	}
+}
+
+func TestExpireUnixXX(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	resp1 := sendCmd(t, conn, reader, "SET mykey myvalue")
+	if str, ok := resp1.(parser.SimpleString); !ok || str != "OK" {
+		t.Errorf("expected OK, got %v", resp1)
+	}
+	_unixtime := time.Now().Add(time.Second * 5).Unix()
+	//case 1: no expiretime set -> should  not set
+	resp := sendCmd(t, conn, reader, "EXPIREAT mykey " + strconv.FormatInt(_unixtime, 10) +" XX")
+
+	i64 := int64(resp.(parser.Integer))
+	if i64 != 0 {
+		t.Errorf("expected 0, got %v", i64)
+	}
+	// case 2: expiretime already set -> should not set
+	
+	//first set the expire time
+	resp2 := sendCmd(t, conn, reader, "EXPIREAT mykey " + strconv.FormatInt(_unixtime, 10))
+	i64 = int64(resp2.(parser.Integer))
+	if i64 != 1 {
+		t.Errorf("expected 1, got %v", i64)
+	}
+	//now since the expire time is already set, it should be reset with XX now
+	resp3 := sendCmd(t, conn, reader, "EXPIREAT mykey " + strconv.FormatInt(_unixtime, 10) +" XX")
+	ret_code := int64(resp3.(parser.Integer))
+	if ret_code != 1 {
+		t.Errorf("expected 1, got %v", i64)
+	}
+}
+
+func TestExpireUnixLT(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	resp1 := sendCmd(t, conn, reader, "SET mykey myvalue")
+	if str, ok := resp1.(parser.SimpleString); !ok || str != "OK" {
+		t.Errorf("expected OK, got %v", resp1)
+	}
+	_unixtime := time.Now().Add(time.Second * 5).Unix()
+	resp := sendCmd(t, conn, reader, "EXPIREAT mykey " + strconv.FormatInt(_unixtime, 10))
+	i64 := int64(resp.(parser.Integer))
+	if i64 != 1 {
+		t.Errorf("expected 1, got %v", i64)
+	}
+	// case 1, use Expiry time that is less -> should set
+	_unixtime -=  20
+	resp2 := sendCmd(t, conn, reader, "EXPIREAT mykey " + strconv.FormatInt(_unixtime, 10) +" LT")
+	i64 = int64(resp2.(parser.Integer))
+	if i64 != 1 {
+		t.Errorf("expected 1, got %v", i64)
+	}
+	// case 2, use Expiry time that is greater than the current expiry time -> should not set
+	_unixtime +=  20
+	resp3 := sendCmd(t, conn, reader, "EXPIREAT mykey " + strconv.FormatInt(_unixtime, 10) +" LT")
+	i64 = int64(resp3.(parser.Integer))
+	if i64 != 0 {
+		t.Errorf("expected 0, got %v", i64)
+	}
+	
+
+}
+
+func TestExpireUnixGT(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	resp1 := sendCmd(t, conn, reader, "SET mykey myvalue")
+	if str, ok := resp1.(parser.SimpleString); !ok || str != "OK" {
+		t.Errorf("expected OK, got %v", resp1)
+	}
+	_unixtime := time.Now().Add(time.Second * 5).Unix()
+	resp := sendCmd(t, conn, reader, "EXPIREAT mykey " + strconv.FormatInt(_unixtime, 10))
+	i64 := int64(resp.(parser.Integer))
+	if i64 != 1 {
+		t.Errorf("expected 1, got %v", i64)
+	}
+	// case 1, use Expiry time that is less -> should not set
+	_unixtime -=  3
+	resp2 := sendCmd(t, conn, reader, "EXPIREAT mykey " + strconv.FormatInt(_unixtime, 10) +" GT")
+	i64 = int64(resp2.(parser.Integer))
+	if i64 != 0 {
+		t.Errorf("expected 0, got %v", i64)
+	}
+	// case 2, use Expiry time that is greater than the current expiry time -> should set
+	_unixtime +=  30
+	resp3 := sendCmd(t, conn, reader, "EXPIREAT mykey " + strconv.FormatInt(_unixtime, 10) +" GT")
+	i64 = int64(resp3.(parser.Integer))
+	if i64 != 1 {
+		t.Errorf("expected 1, got %v", i64)
+	}
+
+}
+
 
