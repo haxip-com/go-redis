@@ -36,6 +36,7 @@ var commands = map[string]CommandSpec{
 	"DECR": {handleDecr, 2},
 	"CONFIG": {handleConfig,-2},
 	"EXPIRE": {handleExpire, -3},
+	"EXPIREAT":{handleExpire, -3},
 
 }
 
@@ -51,14 +52,18 @@ func handleEcho(store *Store, args []parser.Value) parser.Value {
 }
 
 func handleGet(store *Store, args []parser.Value) parser.Value {
+	fmt.Println("called")
 	bs, ok := args[1].(parser.BulkString)
 	if !ok {
+		fmt.Println("maybe here")
 		return parser.Error("ERR wrong argument type")
 	}
 	val, exists := store.Get(string(bs))
 	if !exists {
+		fmt.Println("does not exist")
 		return parser.BulkString(nil)
 	}
+	fmt.Println("passing here")
 	return parser.BulkString(val)
 }
 
@@ -123,54 +128,80 @@ func handleConfig(store *Store, args []parser.Value) parser.Value {
 	return parser.Error("ERR invalid format")
 }
 
+func getSetterAndDuration(command string, t int64, store *Store) (expirationSetter, time.Duration) {
+	switch command {
+	case "EXPIRE":
+		duration := time.Duration(t) * time.Second
+		setter := withTTL(&store.volatileKeyMap, duration)
+		return setter, duration
+	case "EXPIREAT":
+		converted_t := time.Unix(t, 0)
+		setter, duration := withUnixExpiry(&store.volatileKeyMap, converted_t)
+		return setter, duration
+	default:
+		return nil, time.Duration(time.Now().Day())
+	}
+}
+
 func handleExpire(store *Store, args []parser.Value) parser.Value {
+	command := args[0].(parser.BulkString)
+	timeString, ok := args[2].(parser.BulkString)
+		if !ok {
+			return parser.Error("ERR wrong argument type")
+		}
+	t, err := strconv.ParseInt(string(timeString), 10, 64)
+		if  err != nil {
+			return parser.Error("ERR wrong argument type")
+		}
 	key, ok := args[1].(parser.BulkString)
 	if !ok {
 		return parser.Error("ERR wrong argument type")
 	}
+	switch string(command) {
+	case "EXPIRE":
+		if t < 0 {
+			store.volatileKeyMap.Delete(string(key))
+			return parser.Integer(0)
+		}
+	case "EXPIREAT":
+		if time.Unix(t, 0).Before(time.Now()) {
+			store.volatileKeyMap.Delete(string(key))
+			return parser.Integer(1)
+		}
+	default:
+		return parser.Error("ERR wrong argument type")
+	}
+	setter, duration:= getSetterAndDuration(string(command), t, store)
 	if len(args) < 3 {
 		return parser.Error("ERR wrong number of arguments for EXPIRE command")
 	}
-	secondsString, ok := args[2].(parser.BulkString)
-	if !ok {
-		return parser.Error("ERR wrong argument type")
-	}
-	seconds, err := strconv.ParseInt(string(secondsString), 10, 64)
-	if  err != nil {
-		return parser.Error("ERR wrong argument type")
-	}
-	if seconds <= 0 {
-		return parser.Integer(0)
-	}
-	duration := time.Duration(seconds) * time.Second
-
 	if len(args) > 3 {
 		optionBulkString, ok := args[3].(parser.BulkString)
 		if !ok {
 			return parser.Error("ERR wrong argument type")
 		}
 		option := string(optionBulkString)
-		res := handleExpireOption(store, option, string(key), duration)
+		res := handleExpireOption(store, option, string(key), setter, duration)
 		return res
 
 	} else {
-		store.volatileKeyMap.Set(string(key), duration)
+		store.volatileKeyMap.apply(string(key), setter)
 		return parser.Integer(1)
 	}
 }
 
-func handleExpireOption(store *Store, option string, key string, duration time.Duration) parser.Value {
+func handleExpireOption(store *Store, option string, key string, setter expirationSetter, duration time.Duration) parser.Value {
 	switch  option {
 		case "NX":
 			if  store.isVolatile(string(key)){
 				return parser.Integer(0)
 			} else {
-				store.volatileKeyMap.Set(string(key), duration)
+				store.volatileKeyMap.apply(string(key), setter)
 				return parser.Integer(1)
 			}
 		case "XX":
 			if  store.isVolatile(string(key)){
-				store.volatileKeyMap.Set(string(key), duration)
+				store.volatileKeyMap.apply(string(key), setter)
 				return parser.Integer(1)
 			} else {
 				return parser.Integer(0)
@@ -179,7 +210,7 @@ func handleExpireOption(store *Store, option string, key string, duration time.D
 			if store.isVolatile(string(key)){
 				originalDuration, ok :=store.volatileKeyMap.GetDuration(string(key))
 				if ok==nil && duration > originalDuration {
-					store.volatileKeyMap.Set(string(key), duration)
+					store.volatileKeyMap.apply(string(key), setter)
 					return parser.Integer(1)
 				} else {
 					return parser.Integer(0)
@@ -188,11 +219,11 @@ func handleExpireOption(store *Store, option string, key string, duration time.D
 			} else {
 				return parser.Integer(0)
 			}
-		case "LT": 
+		case "LT":
 			if store.isVolatile(string(key)){
 				originalDuration, ok :=store.volatileKeyMap.GetDuration(string(key))
 				if ok==nil && duration < originalDuration {
-					store.volatileKeyMap.Set(string(key), duration)
+					store.volatileKeyMap.apply(string(key), setter)
 					return parser.Integer(1)
 				} else {
 					return parser.Integer(0)
@@ -218,11 +249,9 @@ func connHandler(conn net.Conn, store *Store) {
 			}
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				return
-			}	
+			}
 			return
-			
 		}
-		
 		arr, ok := value.(parser.Array)
 		if !ok || len(arr) == 0 {
 			reply, _ := parser.Serialize(parser.Error("ERR protocol error"))
@@ -293,6 +322,5 @@ func main() {
 			continue
 		}
 		go connHandler(conn, store)
-		
 	}
 }

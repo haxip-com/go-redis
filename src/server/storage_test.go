@@ -243,7 +243,7 @@ func TestStoreConcurrentIncr(t *testing.T) {
 
 func TestIsVolatile(t *testing.T) {
 	store := &Store{}
-	store.volatileKeyMap.data = make(map[string]TimeEvent)
+	store.volatileKeyMap.data = make(map[string]ExpirationTime)
 
 	// key does not exist
 	if store.isVolatile("missing") {
@@ -251,7 +251,7 @@ func TestIsVolatile(t *testing.T) {
 	}
 
 	// add key
-	store.volatileKeyMap.data["volatile"] = TimeEvent{expiryTime: time.Now(), timeToLive: time.Duration(time.Minute * 5)}
+	store.volatileKeyMap.data["volatile"] = ExpirationTime{expiryTime: time.Now(), durationSet: time.Duration(time.Minute * 5)}
 
 	if !store.isVolatile("volatile") {
 		t.Fatalf("expected true for volatile key")
@@ -260,7 +260,7 @@ func TestIsVolatile(t *testing.T) {
 
 func newTTLMap() *TTLMap {
 	return &TTLMap{
-		data: make(map[string]TimeEvent),
+		data: make(map[string]ExpirationTime),
 	}
 }
 
@@ -349,7 +349,7 @@ func TestTTLMapIsValidMissingKey(t *testing.T) {
 
 func TestIsVolatileRace(t *testing.T) {
 	store := &Store{}
-	store.volatileKeyMap.data = make(map[string]TimeEvent)
+	store.volatileKeyMap.data = make(map[string]ExpirationTime)
 
 	var wg sync.WaitGroup
 
@@ -361,7 +361,7 @@ func TestIsVolatileRace(t *testing.T) {
 			key := fmt.Sprintf("key-%d", i)
 			for j := 0; j < 1000; j++ {
 				store.volatileKeyMap.mu.Lock()
-				store.volatileKeyMap.data[key] = TimeEvent{expiryTime: time.Now().Add(time.Minute), timeToLive: time.Minute}
+				store.volatileKeyMap.data[key] = ExpirationTime{expiryTime: time.Now().Add(time.Minute), durationSet: time.Minute}
 				store.volatileKeyMap.mu.Unlock()
 			}
 		}(i)
