@@ -152,14 +152,6 @@ func withTTL(m *TTLMap, ttl time.Duration) expirationSetter {
 	}
 }
 
-
-func (m *TTLMap) unixSet(key string, expiryTime time.Time) {
-	m.setExpiration(key, ExpirationTime{
-		expiryTime:  expiryTime,
-		durationSet: expiryTime.Sub(time.Now()),
-	})
-}
-
 func (m *TTLMap) Set(key string, ttl time.Duration) {
 	m.setExpiration(key, ExpirationTime{
 		expiryTime:  time.Now().Add(ttl),

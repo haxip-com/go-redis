@@ -161,7 +161,7 @@ func handleExpire(store *Store, args []parser.Value) parser.Value {
 	case "EXPIRE":
 		if t < 0 {
 			store.volatileKeyMap.Delete(string(key))
-			return parser.Integer(0)
+			return parser.Integer(1)
 		}
 	case "EXPIREAT":
 		if time.Unix(t, 0).Before(time.Now()) {
@@ -172,9 +172,6 @@ func handleExpire(store *Store, args []parser.Value) parser.Value {
 		return parser.Error("ERR wrong argument type")
 	}
 	setter, duration:= getSetterAndDuration(string(command), t, store)
-	if len(args) < 3 {
-		return parser.Error("ERR wrong number of arguments for EXPIRE command")
-	}
 	if len(args) > 3 {
 		optionBulkString, ok := args[3].(parser.BulkString)
 		if !ok {
