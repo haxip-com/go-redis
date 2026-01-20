@@ -270,7 +270,7 @@ func TestTTLMapGetExpiry(t *testing.T) {
 
 	m.Set("key", ttl)
 
-	expiry, err := m.GetExpiry("key")
+	expiry, err := m.GetSetExpiry("key")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestTTLMapGetExpiry(t *testing.T) {
 func TestTTLMapGetExpiryMissingKey(t *testing.T) {
 	m := newTTLMap()
 
-	_, err := m.GetExpiry("missing")
+	_, err := m.GetSetExpiry("missing")
 	if err == nil {
 		t.Fatalf("expected error for missing key")
 	}
@@ -295,7 +295,7 @@ func TestTTLMapGetDuration(t *testing.T) {
 
 	m.Set("key", ttl)
 
-	d, err := m.GetDuration("key")
+	d, err := m.GetSetDuration("key")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestTTLMapGetDuration(t *testing.T) {
 func TestTTLMapGetDurationMissingKey(t *testing.T) {
 	m := newTTLMap()
 
-	_, err := m.GetDuration("missing")
+	_, err := m.GetSetDuration("missing")
 	if err == nil {
 		t.Fatalf("expected error for missing key")
 	}
@@ -405,8 +405,8 @@ func TestTTLMapConcurrentAccessRace(t *testing.T) {
 			defer wg.Done()
 			key := fmt.Sprintf("key-%d", i)
 			for j := 0; j < 1000; j++ {
-				m.GetExpiry(key)
-				m.GetDuration(key)
+				m.GetSetExpiry(key)
+				m.GetSetDuration(key)
 			}
 		}(i)
 	}
