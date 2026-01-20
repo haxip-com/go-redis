@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
 	"github.com/haxip-com/go-redis/src/parser"
 )
 
@@ -636,6 +637,88 @@ func TestExpireUnixGT(t *testing.T) {
 		t.Errorf("expected 1, got %v", i64)
 	}
 
+}
+
+func TestTTL(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	resp1 := sendCmd(t, conn, reader, "SET mykey myvalue")
+	if str, ok := resp1.(parser.SimpleString); !ok || str != "OK" {
+		t.Errorf("expected OK, got %v", resp1)
+	}
+	resp := sendCmd(t, conn, reader, "EXPIRE mykey 2")
+	if _, ok := resp.(parser.Integer); !ok  {
+		t.Errorf("expected OK, got %v", resp1)
+	}
+	i64 := int64(resp.(parser.Integer))
+	if i64 != 1 {
+		t.Errorf("expected 1, got %v", i64)
+	}
+	val, ok := srv.store.volatileKeyMap.data["mykey"]
+    if !ok {
+        t.Fatalf("expected key %q to exist in volatileKeyMap", "mykey")
+    }
+	if int64(val.durationSet.Seconds()) != int64(2) {
+        t.Fatalf("expected key %q to have expiretime 2, got %f", "mykey", val.durationSet.Seconds())
+    }
+	//set the expiry to 3 seconds from now
+	srv.store.volatileKeyMap.data["mykey"] = ExpirationTime{expiryTime: time.Now().Add(time.Second*3), durationSet: time.Millisecond} 
+	//get the TTL, should be 3 seconds
+	res := sendCmd(t, conn, reader, "TTL mykey")
+	TTL := int64(res.(parser.Integer))
+	//TTL returns truncated time, will be 2
+	if TTL < 2 || TTL > 2 {
+    	t.Errorf("expected TTL of 2, got %v", TTL)
+	}
+	
+}
+
+func testTTLWithExpiry(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	resp1 := sendCmd(t, conn, reader, "SET mykey myvalue")
+	if str, ok := resp1.(parser.SimpleString); !ok || str != "OK" {
+		t.Errorf("expected OK, got %v", resp1)
+	}
+	// now set the key to expire
+	srv.store.volatileKeyMap.data["mykey"] = ExpirationTime{expiryTime: time.Now().Add(time.Second*-5), durationSet: time.Millisecond}
+	res := sendCmd(t, conn, reader, "TTL mykey")
+	ret_code := int64(res.(parser.Integer))
+	//response should be -2
+	if ret_code != -2{
+    	t.Errorf("expected -1, got %v", ret_code)
+	}
+
+}
+
+func testTTLNoExpiry(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	resp1 := sendCmd(t, conn, reader, "SET mykey myvalue")
+	if str, ok := resp1.(parser.SimpleString); !ok || str != "OK" {
+		t.Errorf("expected OK, got %v", resp1)
+	}
+	res := sendCmd(t, conn, reader, "TTL mykey")
+	ret_code := int64(res.(parser.Integer))
+	//response should be -1
+	if ret_code != -1{
+    	t.Errorf("expected -1, got %v", ret_code)
+	}
 }
 
 

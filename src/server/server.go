@@ -37,6 +37,8 @@ var commands = map[string]CommandSpec{
 	"CONFIG": {handleConfig,-2},
 	"EXPIRE": {handleExpire, -3},
 	"EXPIREAT":{handleExpire, -3},
+	"TTL": {handleTTL, 2},
+
 
 }
 
@@ -205,7 +207,7 @@ func handleExpireOption(store *Store, option string, key string, setter expirati
 			}
 		case "GT":
 			if store.isVolatile(string(key)){
-				originalDuration, ok :=store.volatileKeyMap.GetDuration(string(key))
+				originalDuration, ok :=store.volatileKeyMap.GetSetDuration(string(key))
 				if ok==nil && duration > originalDuration {
 					store.volatileKeyMap.apply(string(key), setter)
 					return parser.Integer(1)
@@ -218,7 +220,7 @@ func handleExpireOption(store *Store, option string, key string, setter expirati
 			}
 		case "LT":
 			if store.isVolatile(string(key)){
-				originalDuration, ok :=store.volatileKeyMap.GetDuration(string(key))
+				originalDuration, ok :=store.volatileKeyMap.GetSetDuration(string(key))
 				if ok==nil && duration < originalDuration {
 					store.volatileKeyMap.apply(string(key), setter)
 					return parser.Integer(1)
@@ -231,6 +233,24 @@ func handleExpireOption(store *Store, option string, key string, setter expirati
 		default:
 			return parser.Error("ERR Unsupported option " + option)
 		}
+}
+
+func handleTTL(store *Store, args []parser.Value) parser.Value {
+	key, ok := args[1].(parser.BulkString)
+	if !ok {
+		return parser.Error("ERR wrong argument type")
+	}
+	ttl, err := store.volatileKeyMap.GetTTL(string(key))
+	if err != nil {
+		_, ok := store.Get(string(key))
+		if !ok {
+			return parser.Integer(-2)
+		} else {
+			return parser.Integer(-1)
+		}
+	}
+	seconds := int64(ttl / time.Second)
+	return parser.Integer(seconds)
 }
 
 func connHandler(conn net.Conn, store *Store) {

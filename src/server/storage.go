@@ -176,7 +176,7 @@ func (m *TTLMap) Delete(key string) {
     delete(m.data, key)
 }
 
-func (m *TTLMap) GetExpiry(key string) (time.Time, error) {
+func (m *TTLMap) GetSetExpiry(key string) (time.Time, error) {
     m.mu.RLock()
     defer m.mu.RUnlock()
     timeEvent, ok := m.data[key]
@@ -187,7 +187,22 @@ func (m *TTLMap) GetExpiry(key string) (time.Time, error) {
 	return expiry, nil
 }
 
-func (m *TTLMap) GetDuration(key string) (time.Duration, error) {
+func (m *TTLMap) GetTTL(key string) (time.Duration, error) {
+    m.mu.RLock()
+    defer m.mu.RUnlock()
+    timeEvent, ok := m.data[key]
+	if !ok {
+        return time.Duration(time.Microsecond), fmt.Errorf("Key does not have a TTL or does not exist")
+    }
+	expiry := timeEvent.expiryTime
+	//expired key that was not deleted yet
+	if !time.Now().Before(expiry){
+		return time.Duration(time.Microsecond), fmt.Errorf("Key does not have a TTL or does not exist")
+	}
+	return expiry.Sub(time.Now()), nil
+}
+
+func (m *TTLMap) GetSetDuration(key string) (time.Duration, error) {
     m.mu.RLock()
     defer m.mu.RUnlock()
     timeEvent, ok := m.data[key]
