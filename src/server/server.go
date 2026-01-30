@@ -38,8 +38,12 @@ var commands = map[string]CommandSpec{
 	"EXPIRE": {handleExpire, -3},
 	"EXPIREAT":{handleExpire, -3},
 	"TTL": {handleTTL, 2},
-
-
+	"LPUSH":  {handleLPush, -3},
+	"RPUSH":  {handleRPush, -3},
+	"LPOP":   {handleLPop, -2},
+	"RPOP":   {handleRPop, -2},
+	"LRANGE": {handleLRange, 4},
+	"LLEN":   {handleLLen, 2},
 }
 
 func handlePing(store *Store, args []parser.Value) parser.Value {
@@ -54,18 +58,17 @@ func handleEcho(store *Store, args []parser.Value) parser.Value {
 }
 
 func handleGet(store *Store, args []parser.Value) parser.Value {
-	fmt.Println("called")
 	bs, ok := args[1].(parser.BulkString)
 	if !ok {
-		fmt.Println("maybe here")
 		return parser.Error("ERR wrong argument type")
 	}
-	val, exists := store.Get(string(bs))
+	val, exists, err := store.GetWithTypeCheck(string(bs))
+	if err != nil {
+		return parser.Error(err.Error())
+	}
 	if !exists {
-		fmt.Println("does not exist")
 		return parser.BulkString(nil)
 	}
-	fmt.Println("passing here")
 	return parser.BulkString(val)
 }
 
@@ -116,6 +119,168 @@ func handleDecr(store *Store, args []parser.Value) parser.Value {
 		return parser.Error(err.Error())
 	}
 	return parser.Integer(newVal)
+}
+
+func handleLPush(store *Store, args []parser.Value) parser.Value {
+	key, ok := args[1].(parser.BulkString)
+	if !ok {
+		return parser.Error("ERR wrong argument type")
+	}
+	elements := make([][]byte, 0, len(args)-2)
+	for i := 2; i < len(args); i++ {
+		bs, ok := args[i].(parser.BulkString)
+		if !ok {
+			return parser.Error("ERR wrong argument type")
+		}
+		elements = append(elements, []byte(bs))
+	}
+	n, err := store.LPush(string(key), elements...)
+	if err != nil {
+		return parser.Error(err.Error())
+	}
+	return parser.Integer(n)
+}
+
+func handleRPush(store *Store, args []parser.Value) parser.Value {
+	key, ok := args[1].(parser.BulkString)
+	if !ok {
+		return parser.Error("ERR wrong argument type")
+	}
+	elements := make([][]byte, 0, len(args)-2)
+	for i := 2; i < len(args); i++ {
+		bs, ok := args[i].(parser.BulkString)
+		if !ok {
+			return parser.Error("ERR wrong argument type")
+		}
+		elements = append(elements, []byte(bs))
+	}
+	n, err := store.RPush(string(key), elements...)
+	if err != nil {
+		return parser.Error(err.Error())
+	}
+	return parser.Integer(n)
+}
+
+func handleLPop(store *Store, args []parser.Value) parser.Value {
+	key, ok := args[1].(parser.BulkString)
+	if !ok {
+		return parser.Error("ERR wrong argument type")
+	}
+	count := 0
+	hasCount := false
+	if len(args) > 2 {
+		countBS, ok := args[2].(parser.BulkString)
+		if !ok {
+			return parser.Error("ERR wrong argument type")
+		}
+		c, err := strconv.Atoi(string(countBS))
+		if err != nil {
+			return parser.Error("ERR value is not an integer or out of range")
+		}
+		count = c
+		hasCount = true
+	}
+	if !hasCount {
+		count = 1
+	}
+	result, err := store.LPop(string(key), count)
+	if err != nil {
+		return parser.Error(err.Error())
+	}
+	if result == nil {
+		return parser.BulkString(nil)
+	}
+	if !hasCount {
+		return parser.BulkString(result[0])
+	}
+	arr := make([]parser.Value, len(result))
+	for i, v := range result {
+		arr[i] = parser.BulkString(v)
+	}
+	return parser.Array(arr)
+}
+
+func handleRPop(store *Store, args []parser.Value) parser.Value {
+	key, ok := args[1].(parser.BulkString)
+	if !ok {
+		return parser.Error("ERR wrong argument type")
+	}
+	count := 0
+	hasCount := false
+	if len(args) > 2 {
+		countBS, ok := args[2].(parser.BulkString)
+		if !ok {
+			return parser.Error("ERR wrong argument type")
+		}
+		c, err := strconv.Atoi(string(countBS))
+		if err != nil {
+			return parser.Error("ERR value is not an integer or out of range")
+		}
+		count = c
+		hasCount = true
+	}
+	if !hasCount {
+		count = 1
+	}
+	result, err := store.RPop(string(key), count)
+	if err != nil {
+		return parser.Error(err.Error())
+	}
+	if result == nil {
+		return parser.BulkString(nil)
+	}
+	if !hasCount {
+		return parser.BulkString(result[0])
+	}
+	arr := make([]parser.Value, len(result))
+	for i, v := range result {
+		arr[i] = parser.BulkString(v)
+	}
+	return parser.Array(arr)
+}
+
+func handleLRange(store *Store, args []parser.Value) parser.Value {
+	key, ok := args[1].(parser.BulkString)
+	if !ok {
+		return parser.Error("ERR wrong argument type")
+	}
+	startBS, ok := args[2].(parser.BulkString)
+	if !ok {
+		return parser.Error("ERR wrong argument type")
+	}
+	stopBS, ok := args[3].(parser.BulkString)
+	if !ok {
+		return parser.Error("ERR wrong argument type")
+	}
+	start, err := strconv.Atoi(string(startBS))
+	if err != nil {
+		return parser.Error("ERR value is not an integer or out of range")
+	}
+	stop, err := strconv.Atoi(string(stopBS))
+	if err != nil {
+		return parser.Error("ERR value is not an integer or out of range")
+	}
+	result, err := store.LRange(string(key), start, stop)
+	if err != nil {
+		return parser.Error(err.Error())
+	}
+	arr := make([]parser.Value, len(result))
+	for i, v := range result {
+		arr[i] = parser.BulkString(v)
+	}
+	return parser.Array(arr)
+}
+
+func handleLLen(store *Store, args []parser.Value) parser.Value {
+	key, ok := args[1].(parser.BulkString)
+	if !ok {
+		return parser.Error("ERR wrong argument type")
+	}
+	n, err := store.LLen(string(key))
+	if err != nil {
+		return parser.Error(err.Error())
+	}
+	return parser.Integer(n)
 }
 
 func handleConfig(store *Store, args []parser.Value) parser.Value {

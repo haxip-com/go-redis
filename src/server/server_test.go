@@ -721,4 +721,299 @@ func testTTLNoExpiry(t *testing.T) {
 	}
 }
 
+func TestLPushCommand(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	resp := sendCmd(t, conn, reader, "LPUSH mylist a b c")
+	if num, ok := resp.(parser.Integer); !ok || num != 3 {
+		t.Errorf("expected 3, got %v", resp)
+	}
+
+	// Verify order: LPUSH a b c => [c, b, a]
+	resp = sendCmd(t, conn, reader, "LRANGE mylist 0 -1")
+	arr, ok := resp.(parser.Array)
+	if !ok || len(arr) != 3 {
+		t.Fatalf("expected array of 3, got %v", resp)
+	}
+	expected := []string{"c", "b", "a"}
+	for i, v := range arr {
+		if bs, ok := v.(parser.BulkString); !ok || string(bs) != expected[i] {
+			t.Errorf("index %d: expected %q, got %v", i, expected[i], v)
+		}
+	}
+}
+
+func TestRPushCommand(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	resp := sendCmd(t, conn, reader, "RPUSH mylist a b c")
+	if num, ok := resp.(parser.Integer); !ok || num != 3 {
+		t.Errorf("expected 3, got %v", resp)
+	}
+
+	resp = sendCmd(t, conn, reader, "LRANGE mylist 0 -1")
+	arr, ok := resp.(parser.Array)
+	if !ok || len(arr) != 3 {
+		t.Fatalf("expected array of 3, got %v", resp)
+	}
+	expected := []string{"a", "b", "c"}
+	for i, v := range arr {
+		if bs, ok := v.(parser.BulkString); !ok || string(bs) != expected[i] {
+			t.Errorf("index %d: expected %q, got %v", i, expected[i], v)
+		}
+	}
+}
+
+func TestLPopCommand(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	sendCmd(t, conn, reader, "RPUSH mylist a b c")
+
+	// Single pop (no count)
+	resp := sendCmd(t, conn, reader, "LPOP mylist")
+	if bs, ok := resp.(parser.BulkString); !ok || string(bs) != "a" {
+		t.Errorf("expected 'a', got %v", resp)
+	}
+
+	// Pop on non-existent key
+	resp = sendCmd(t, conn, reader, "LPOP missing")
+	if resp != nil {
+		t.Errorf("expected nil, got %v", resp)
+	}
+}
+
+func TestLPopWithCount(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	sendCmd(t, conn, reader, "RPUSH mylist a b c")
+
+	resp := sendCmd(t, conn, reader, "LPOP mylist 2")
+	arr, ok := resp.(parser.Array)
+	if !ok || len(arr) != 2 {
+		t.Fatalf("expected array of 2, got %v", resp)
+	}
+	if bs, ok := arr[0].(parser.BulkString); !ok || string(bs) != "a" {
+		t.Errorf("expected 'a', got %v", arr[0])
+	}
+	if bs, ok := arr[1].(parser.BulkString); !ok || string(bs) != "b" {
+		t.Errorf("expected 'b', got %v", arr[1])
+	}
+}
+
+func TestRPopCommand(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	sendCmd(t, conn, reader, "RPUSH mylist a b c")
+
+	resp := sendCmd(t, conn, reader, "RPOP mylist")
+	if bs, ok := resp.(parser.BulkString); !ok || string(bs) != "c" {
+		t.Errorf("expected 'c', got %v", resp)
+	}
+
+	resp = sendCmd(t, conn, reader, "RPOP missing")
+	if resp != nil {
+		t.Errorf("expected nil, got %v", resp)
+	}
+}
+
+func TestRPopWithCount(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	sendCmd(t, conn, reader, "RPUSH mylist a b c")
+
+	resp := sendCmd(t, conn, reader, "RPOP mylist 2")
+	arr, ok := resp.(parser.Array)
+	if !ok || len(arr) != 2 {
+		t.Fatalf("expected array of 2, got %v", resp)
+	}
+	if bs, ok := arr[0].(parser.BulkString); !ok || string(bs) != "b" {
+		t.Errorf("expected 'b', got %v", arr[0])
+	}
+	if bs, ok := arr[1].(parser.BulkString); !ok || string(bs) != "c" {
+		t.Errorf("expected 'c', got %v", arr[1])
+	}
+}
+
+func TestLRangeCommand(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	sendCmd(t, conn, reader, "RPUSH mylist a b c d")
+
+	resp := sendCmd(t, conn, reader, "LRANGE mylist 1 2")
+	arr, ok := resp.(parser.Array)
+	if !ok || len(arr) != 2 {
+		t.Fatalf("expected array of 2, got %v", resp)
+	}
+	if bs, ok := arr[0].(parser.BulkString); !ok || string(bs) != "b" {
+		t.Errorf("expected 'b', got %v", arr[0])
+	}
+
+	// Non-existent key returns empty array
+	resp = sendCmd(t, conn, reader, "LRANGE missing 0 -1")
+	arr, ok = resp.(parser.Array)
+	if !ok || len(arr) != 0 {
+		t.Errorf("expected empty array, got %v", resp)
+	}
+}
+
+func TestLLenCommand(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	sendCmd(t, conn, reader, "RPUSH mylist a b c")
+
+	resp := sendCmd(t, conn, reader, "LLEN mylist")
+	if num, ok := resp.(parser.Integer); !ok || num != 3 {
+		t.Errorf("expected 3, got %v", resp)
+	}
+
+	resp = sendCmd(t, conn, reader, "LLEN missing")
+	if num, ok := resp.(parser.Integer); !ok || num != 0 {
+		t.Errorf("expected 0, got %v", resp)
+	}
+}
+
+func TestListArityErrors(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	// LPUSH needs at least key + element
+	resp := sendCmd(t, conn, reader, "LPUSH mylist")
+	if _, ok := resp.(parser.Error); !ok {
+		t.Errorf("expected error for LPUSH arity, got %v", resp)
+	}
+
+	resp = sendCmd(t, conn, reader, "RPUSH mylist")
+	if _, ok := resp.(parser.Error); !ok {
+		t.Errorf("expected error for RPUSH arity, got %v", resp)
+	}
+
+	resp = sendCmd(t, conn, reader, "LPOP")
+	if _, ok := resp.(parser.Error); !ok {
+		t.Errorf("expected error for LPOP arity, got %v", resp)
+	}
+
+	resp = sendCmd(t, conn, reader, "RPOP")
+	if _, ok := resp.(parser.Error); !ok {
+		t.Errorf("expected error for RPOP arity, got %v", resp)
+	}
+
+	// LRANGE needs exactly 4 args
+	resp = sendCmd(t, conn, reader, "LRANGE mylist 0")
+	if _, ok := resp.(parser.Error); !ok {
+		t.Errorf("expected error for LRANGE arity, got %v", resp)
+	}
+
+	resp = sendCmd(t, conn, reader, "LLEN")
+	if _, ok := resp.(parser.Error); !ok {
+		t.Errorf("expected error for LLEN arity, got %v", resp)
+	}
+}
+
+func TestWrongTypeCrossCommands(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	// SET then LPUSH
+	sendCmd(t, conn, reader, "SET strkey hello")
+	resp := sendCmd(t, conn, reader, "LPUSH strkey x")
+	if err, ok := resp.(parser.Error); !ok || !bytes.Contains([]byte(err), []byte("WRONGTYPE")) {
+		t.Errorf("expected WRONGTYPE, got %v", resp)
+	}
+
+	// LPUSH then GET
+	sendCmd(t, conn, reader, "LPUSH listkey a")
+	resp = sendCmd(t, conn, reader, "GET listkey")
+	if err, ok := resp.(parser.Error); !ok || !bytes.Contains([]byte(err), []byte("WRONGTYPE")) {
+		t.Errorf("expected WRONGTYPE, got %v", resp)
+	}
+
+	// LPUSH then INCR
+	resp = sendCmd(t, conn, reader, "INCR listkey")
+	if err, ok := resp.(parser.Error); !ok || !bytes.Contains([]byte(err), []byte("WRONGTYPE")) {
+		t.Errorf("expected WRONGTYPE for INCR on list, got %v", resp)
+	}
+
+	// LPUSH then DECR
+	resp = sendCmd(t, conn, reader, "DECR listkey")
+	if err, ok := resp.(parser.Error); !ok || !bytes.Contains([]byte(err), []byte("WRONGTYPE")) {
+		t.Errorf("expected WRONGTYPE for DECR on list, got %v", resp)
+	}
+
+	// SET then RPUSH, LPOP, RPOP, LRANGE, LLEN
+	resp = sendCmd(t, conn, reader, "RPUSH strkey x")
+	if err, ok := resp.(parser.Error); !ok || !bytes.Contains([]byte(err), []byte("WRONGTYPE")) {
+		t.Errorf("expected WRONGTYPE for RPUSH on string, got %v", resp)
+	}
+	resp = sendCmd(t, conn, reader, "LPOP strkey")
+	if err, ok := resp.(parser.Error); !ok || !bytes.Contains([]byte(err), []byte("WRONGTYPE")) {
+		t.Errorf("expected WRONGTYPE for LPOP on string, got %v", resp)
+	}
+	resp = sendCmd(t, conn, reader, "RPOP strkey")
+	if err, ok := resp.(parser.Error); !ok || !bytes.Contains([]byte(err), []byte("WRONGTYPE")) {
+		t.Errorf("expected WRONGTYPE for RPOP on string, got %v", resp)
+	}
+	resp = sendCmd(t, conn, reader, "LRANGE strkey 0 -1")
+	if err, ok := resp.(parser.Error); !ok || !bytes.Contains([]byte(err), []byte("WRONGTYPE")) {
+		t.Errorf("expected WRONGTYPE for LRANGE on string, got %v", resp)
+	}
+	resp = sendCmd(t, conn, reader, "LLEN strkey")
+	if err, ok := resp.(parser.Error); !ok || !bytes.Contains([]byte(err), []byte("WRONGTYPE")) {
+		t.Errorf("expected WRONGTYPE for LLEN on string, got %v", resp)
+	}
+
+	// DEL should work on list keys
+	resp = sendCmd(t, conn, reader, "DEL listkey")
+	if num, ok := resp.(parser.Integer); !ok || num != 1 {
+		t.Errorf("expected DEL to return 1, got %v", resp)
+	}
+}
+
 

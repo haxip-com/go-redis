@@ -37,10 +37,14 @@ func WrapValue(val interface{}) ([]byte, bool) {
 		return v, true
 	case int64:
 		return []byte(strconv.FormatInt(v, 10)), true
+	case [][]byte:
+		return nil, false
 	default:
 		return nil, false
 	}
 }
+
+var errWrongType = fmt.Errorf("WRONGTYPE Operation against a key holding the wrong kind of value")
 
 func (s *Store) Get(key string) ([]byte, bool) {
 	s.mu.RLock()
@@ -48,16 +52,40 @@ func (s *Store) Get(key string) ([]byte, bool) {
 	s.mu.RUnlock()
 
 	if !exists {
-    	return nil, false
+		return nil, false
+	}
+	if _, isList := val.([][]byte); isList {
+		return nil, false
 	}
 	// Only delete after RLock released
 	if s.isVolatile(key) && !s.volatileKeyMap.IsValid(key) {
-    	defer func() {
-        	s.Del(key)
-    	}()
-    	return nil, false
+		defer func() {
+			s.Del(key)
+		}()
+		return nil, false
 	}
 	return WrapValue(val)
+}
+
+func (s *Store) GetWithTypeCheck(key string) ([]byte, bool, error) {
+	s.mu.RLock()
+	val, exists := s.data[key]
+	s.mu.RUnlock()
+
+	if !exists {
+		return nil, false, nil
+	}
+	if _, isList := val.([][]byte); isList {
+		return nil, false, errWrongType
+	}
+	if s.isVolatile(key) && !s.volatileKeyMap.IsValid(key) {
+		defer func() {
+			s.Del(key)
+		}()
+		return nil, false, nil
+	}
+	b, ok := WrapValue(val)
+	return b, ok, nil
 }
 
 func (s *Store) Set(key string, val []byte) {
@@ -102,6 +130,8 @@ func (s *Store) IncrBy(key string, delta int64) (int64, error) {
 		v += delta // Clear intent: add delta
 		s.data[key] = v
 		return v, nil
+	case [][]byte:
+		return 0, errWrongType
 	default:
 		return 0, fmt.Errorf("WRONGTYPE Operation against a key holding the wrong kind of value")
 	}
@@ -231,4 +261,140 @@ func (m *TTLMap) IsValid(key string) bool {
     return true
 }
 
+func (s *Store) getList(key string) ([][]byte, bool, error) {
+	val, exists := s.data[key]
+	if !exists {
+		return nil, false, nil
+	}
+	switch v := val.(type) {
+	case [][]byte:
+		return v, true, nil
+	default:
+		return nil, false, fmt.Errorf("WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+}
+
+func (s *Store) LPush(key string, elements ...[]byte) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, _, err := s.getList(key)
+	if err != nil {
+		return 0, err
+	}
+	// Prepend: new = elements_reversed + existing
+	newList := make([][]byte, 0, len(elements)+len(list))
+	for i := len(elements) - 1; i >= 0; i-- {
+		newList = append(newList, elements[i])
+	}
+	newList = append(newList, list...)
+	s.data[key] = newList
+	return int64(len(newList)), nil
+}
+
+func (s *Store) RPush(key string, elements ...[]byte) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, _, err := s.getList(key)
+	if err != nil {
+		return 0, err
+	}
+	list = append(list, elements...)
+	s.data[key] = list
+	return int64(len(list)), nil
+}
+
+func (s *Store) LPop(key string, count int) ([][]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, exists, err := s.getList(key)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+	if count > len(list) {
+		count = len(list)
+	}
+	result := make([][]byte, count)
+	copy(result, list[:count])
+	list = list[count:]
+	if len(list) == 0 {
+		delete(s.data, key)
+	} else {
+		s.data[key] = list
+	}
+	return result, nil
+}
+
+func (s *Store) RPop(key string, count int) ([][]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, exists, err := s.getList(key)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+	if count > len(list) {
+		count = len(list)
+	}
+	start := len(list) - count
+	result := make([][]byte, count)
+	copy(result, list[start:])
+	list = list[:start]
+	if len(list) == 0 {
+		delete(s.data, key)
+	} else {
+		s.data[key] = list
+	}
+	return result, nil
+}
+
+func (s *Store) LRange(key string, start, stop int) ([][]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	list, exists, err := s.getList(key)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return [][]byte{}, nil
+	}
+	length := len(list)
+	// Normalize negative indices
+	if start < 0 {
+		start = length + start
+	}
+	if stop < 0 {
+		stop = length + stop
+	}
+	// Clamp
+	if start < 0 {
+		start = 0
+	}
+	if stop >= length {
+		stop = length - 1
+	}
+	if start > stop {
+		return [][]byte{}, nil
+	}
+	result := make([][]byte, stop-start+1)
+	copy(result, list[start:stop+1])
+	return result, nil
+}
+
+func (s *Store) LLen(key string) (int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	list, exists, err := s.getList(key)
+	if err != nil {
+		return 0, err
+	}
+	if !exists {
+		return 0, nil
+	}
+	return int64(len(list)), nil
+}
 
