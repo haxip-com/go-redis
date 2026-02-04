@@ -2,10 +2,10 @@ package main
 
 import (
 	"fmt"
+	"math/rand"
 	"strconv"
 	"sync"
 	"time"
-	
 )
 
 type ExpirationTime struct {
@@ -27,8 +27,66 @@ type Store struct {
 	volatileKeyMap TTLMap
 }
 
+const (
+	activeExpireSampleSize = 20
+	activeExpireThreshold  = 0.25
+	activeExpireInterval   = 100 * time.Millisecond
+)
+
 func newStore() *Store {
-	return &Store{data: make(map[string]interface{}), volatileKeyMap: TTLMap{data: make(map[string]ExpirationTime)}}
+	s := &Store{
+		data:           make(map[string]interface{}),
+		volatileKeyMap: TTLMap{data: make(map[string]ExpirationTime)},
+	}
+	go s.activeExpireLoop()
+	return s
+}
+
+func (s *Store) activeExpireLoop() {
+	ticker := time.NewTicker(activeExpireInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.activeExpireCycle()
+	}
+}
+
+func (s *Store) activeExpireCycle() {
+	for {
+		keys := s.volatileKeyMap.sampleKeys(activeExpireSampleSize)
+		if len(keys) == 0 {
+			return
+		}
+		expired := 0
+		for _, k := range keys {
+			if !s.volatileKeyMap.IsValid(k) {
+				s.Del(k)
+				expired++
+			}
+		}
+		if float64(expired)/float64(len(keys)) < activeExpireThreshold {
+			return
+		}
+	}
+}
+
+func (m *TTLMap) sampleKeys(n int) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	size := len(m.data)
+	if size == 0 {
+		return nil
+	}
+	if n > size {
+		n = size
+	}
+	keys := make([]string, 0, size)
+	for k := range m.data {
+		keys = append(keys, k)
+	}
+	rand.Shuffle(len(keys), func(i, j int) {
+		keys[i], keys[j] = keys[j], keys[i]
+	})
+	return keys[:n]
 }
 
 func WrapValue(val interface{}) ([]byte, bool) {

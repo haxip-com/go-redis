@@ -678,7 +678,7 @@ func TestTTL(t *testing.T) {
 	
 }
 
-func testTTLWithExpiry(t *testing.T) {
+func TestTTLWithExpiry(t *testing.T) {
 	srv := startTestServer(t)
 	defer srv.Close()
 
@@ -701,7 +701,7 @@ func testTTLWithExpiry(t *testing.T) {
 
 }
 
-func testTTLNoExpiry(t *testing.T) {
+func TestTTLNoExpiry(t *testing.T) {
 	srv := startTestServer(t)
 	defer srv.Close()
 
@@ -718,6 +718,76 @@ func testTTLNoExpiry(t *testing.T) {
 	//response should be -1
 	if ret_code != -1{
     	t.Errorf("expected -1, got %v", ret_code)
+	}
+}
+
+func TestPersist(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	// Set key with expiration
+	sendCmd(t, conn, reader, "SET mykey myvalue")
+	sendCmd(t, conn, reader, "EXPIRE mykey 100")
+
+	// TTL should be positive
+	resp := sendCmd(t, conn, reader, "TTL mykey")
+	ttl := int64(resp.(parser.Integer))
+	if ttl < 1 {
+		t.Fatalf("expected positive TTL, got %v", ttl)
+	}
+
+	// PERSIST should return 1
+	resp = sendCmd(t, conn, reader, "PERSIST mykey")
+	if i, ok := resp.(parser.Integer); !ok || i != 1 {
+		t.Fatalf("expected 1, got %v", resp)
+	}
+
+	// TTL should now be -1 (no expiry)
+	resp = sendCmd(t, conn, reader, "TTL mykey")
+	if i, ok := resp.(parser.Integer); !ok || i != -1 {
+		t.Fatalf("expected -1, got %v", resp)
+	}
+
+	// Key should still be accessible
+	resp = sendCmd(t, conn, reader, "GET mykey")
+	if bs, ok := resp.(parser.BulkString); !ok || string(bs) != "myvalue" {
+		t.Fatalf("expected 'myvalue', got %v", resp)
+	}
+}
+
+func TestPersistNoExpiry(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	sendCmd(t, conn, reader, "SET mykey myvalue")
+
+	// PERSIST on key without expiry should return 0
+	resp := sendCmd(t, conn, reader, "PERSIST mykey")
+	if i, ok := resp.(parser.Integer); !ok || i != 0 {
+		t.Fatalf("expected 0, got %v", resp)
+	}
+}
+
+func TestPersistNonExistent(t *testing.T) {
+	srv := startTestServer(t)
+	defer srv.Close()
+
+	conn, _ := net.Dial("tcp", srv.Addr())
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+
+	// PERSIST on non-existent key should return 0
+	resp := sendCmd(t, conn, reader, "PERSIST nosuchkey")
+	if i, ok := resp.(parser.Integer); !ok || i != 0 {
+		t.Fatalf("expected 0, got %v", resp)
 	}
 }
 

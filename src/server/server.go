@@ -37,7 +37,8 @@ var commands = map[string]CommandSpec{
 	"CONFIG": {handleConfig,-2},
 	"EXPIRE": {handleExpire, -3},
 	"EXPIREAT":{handleExpire, -3},
-	"TTL": {handleTTL, 2},
+	"TTL":     {handleTTL, 2},
+	"PERSIST": {handlePersist, 2},
 	"LPUSH":  {handleLPush, -3},
 	"RPUSH":  {handleRPush, -3},
 	"LPOP":   {handleLPop, -2},
@@ -417,6 +418,19 @@ func handleTTL(store *Store, args []parser.Value) parser.Value {
 	seconds := int64(ttl / time.Second)
 	return parser.Integer(seconds)
 }
+
+func handlePersist(store *Store, args []parser.Value) parser.Value {
+	key, ok := args[1].(parser.BulkString)
+	if !ok {
+		return parser.Error("ERR wrong argument type")
+	}
+	if !store.isVolatile(string(key)) {
+		return parser.Integer(0)
+	}
+	store.volatileKeyMap.Delete(string(key))
+	return parser.Integer(1)
+}
+
 
 func connHandler(conn net.Conn, store *Store) {
 	defer conn.Close()
