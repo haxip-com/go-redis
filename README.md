@@ -6,27 +6,28 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/haxip-com/go-redis)](https://github.com/haxip-com/go-redis)
 [![License](https://img.shields.io/github/license/haxip-com/go-redis)](LICENSE)
 
-A Redis-compatible server built from scratch in Go. Implements the RESP protocol, an in-memory key-value store with expiration, list data structures, and a cluster mode with gossip-based node discovery — all without using any Redis source code or libraries.
-
-## Why This Project?
-
-Building a Redis clone from the ground up is one of the best ways to deeply understand:
-
-- Network protocol design (RESP serialization/deserialization)
-- Concurrent data structure management with fine-grained locking
-- TTL-based key expiration using active + lazy eviction strategies
-- Distributed systems fundamentals: gossip protocols, consistent hashing, failure detection
-- Systems programming in Go: goroutines, TCP listeners, binary protocols
-
-This isn't a wrapper or a binding — it's a from-scratch implementation of Redis internals.
+A lightweight, high-performance Redis-compatible server built from scratch in Go. Features a complete RESP2 protocol implementation, in-memory key-value storage with expiration, list data structures, and a distributed cluster mode with gossip-based node discovery. Zero dependencies on Redis source code or libraries.
 
 ## Features
+
+### Cluster Mode (In Progress)
+- Gossip-based cluster protocol inspired by Redis Cluster
+- Hash tag support for co-locating related keys (`{user:1}.name` and `{user:1}.email` → same slot)
+- Binary message framing with length-prefixed gob encoding
+- Node roles (Master/Replica) and state machine (Online → PFail → Fail)
+- PING/PONG/MEET message types for heartbeat and node discovery
+- Epoch-based configuration versioning for consistency
+
+### Concurrency Model
+- Per-store `sync.RWMutex` for thread-safe concurrent reads and exclusive writes
+- Separate mutex for the TTL map to minimize lock contention
+- Each client connection handled in its own goroutine with configurable read/write timeouts
 
 ### RESP Protocol Engine
 - Full implementation of the Redis Serialization Protocol (RESP2)
 - Supports all five RESP data types: Simple Strings, Errors, Integers, Bulk Strings, and Arrays
-- Inline command parsing for compatibility with tools like `redis-benchmark`
-- Custom serializer and deserializer — no third-party RESP libraries
+- Inline command parsing for compatibility with tools like `redis-cli` and `redis-benchmark`
+- Custom serializer and deserializer with no third-party RESP dependencies
 
 ### Command Support
 
@@ -45,21 +46,6 @@ This isn't a wrapper or a binding — it's a from-scratch implementation of Redi
 - Supports both relative TTL (`EXPIRE`) and absolute Unix timestamps (`EXPIREAT`)
 - `NX`, `XX`, `GT`, `LT` sub-options for conditional expiration
 
-### Concurrency Model
-- Per-store `sync.RWMutex` for thread-safe concurrent reads and exclusive writes
-- Separate mutex for the TTL map to minimize lock contention
-- Each client connection handled in its own goroutine with configurable read/write timeouts
-
-### Cluster Mode (In Progress)
-- Gossip-based cluster protocol inspired by Redis Cluster
-- 16,384 hash slots with CRC16-CCITT hashing (same algorithm as Redis)
-- Hash tag support for co-locating related keys (`{user:1}.name` and `{user:1}.email` → same slot)
-- Dedicated cluster bus on port+10000 for node-to-node communication
-- Binary message framing with length-prefixed gob encoding
-- Node roles (Master/Replica) and state machine (Online → PFail → Fail)
-- PING/PONG/MEET message types for heartbeat and node discovery
-- Epoch-based configuration versioning for consistency
-
 ### Interactive CLI Client
 - Built-in REPL client that connects to the server over TCP
 - Serializes user input into RESP and pretty-prints responses by type
@@ -67,33 +53,46 @@ This isn't a wrapper or a binding — it's a from-scratch implementation of Redi
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                     GoRedis                         │
-│                                                     │
-│  ┌──────────┐    ┌──────────┐    ┌───────────────┐  │
-│  │  Client  │───▶│  RESP    │───▶│   Command     │  │
-│  │  (TCP)   │    │  Parser  │    │   Router      │  │
-│  └──────────┘    └──────────┘    └───────┬───────┘  │
-│                                          │          │
-│                                 ┌────────▼────────┐ │
-│                                 │     Store       │ │
-│                                 │  ┌────────────┐ │ │
-│                                 │  │  Data Map  │ │ │
-│                                 │  │ (RWMutex)  │ │ │
-│                                 │  ├────────────┤ │ │
-│                                 │  │  TTL Map   │ │ │
-│                                 │  │ (RWMutex)  │ │ │
-│                                 │  └────────────┘ │ │
-│                                 └─────────────────┘ │
-│                                                     │
-│  ┌───────────────────────────────────────────────┐  │
-│  │              Cluster Bus (port+10000)         │  │
-│  │  ┌────────┐  ┌────────┐  ┌────────────────┐   │  │
-│  │  │  PING  │  │  PONG  │  │     MEET       │   │  │
-│  │  └────────┘  └────────┘  └────────────────┘   │  │
-│  │  Gossip Protocol · Failure Detection · Epochs │  │
-│  └───────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────┘
+                    ┌──────────────────────────────────────────────┐
+  redis-cli /       │              GoRedis Server                  │
+  client binary     │                                              │
+       │            │  ┌─────────────────────────────────────────┐ │
+       │  TCP       │  │         connHandler (per goroutine)     │ │
+       └───────────▶│  │                                         │ │
+                    │  │  RESP Deserialize ──▶ commands map      │ │
+                    │  │                      lookup + dispatch  │ │
+                    │  └──────────────┬──────────────────────────┘ │
+                    │                 │                            │
+                    │                 ▼                            │
+                    │  ┌──────────────────────────────┐            │
+                    │  │            Store             │            │
+                    │  │  ┌────────────┬────────────┐ │            │
+                    │  │  │  Data Map  │  TTL Map   │ │            │
+                    │  │  │ (RWMutex)  │ (RWMutex)  │ │            │
+                    │  │  └────────────┴────────────┘ │            │
+                    │  │         ▲                    │            │
+                    │  │         │ active expire loop │            │
+                    │  │         │                    │            │
+                    │  └──────────────────────────────┘            │
+                    │                 │                            │
+                    │                 │ slot ownership check       │
+                    │                 ▼                            │
+                    │  ┌───────────────────────────────┐           │
+                    │  │       ClusterState            │           │
+                    │  │  Nodes · Slots[16384] · Epochs│           │
+                    │  └──────────────┬────────────────┘           │
+                    │                 │                            │
+                    │                 ▼                            │
+                    │  ┌──────────────────────────────┐            │
+                    │  │   Cluster Bus                │            │
+                    │  │   PING / PONG / MEET         │            │
+                    │  │   Gossip · Failure Detection │            │
+                    │  └──────────────────────────────┘            │
+                    │                 ▲                            │
+                    └─────────────────┼────────────────────────────┘
+                                      │ TCP (binary, length-prefixed)
+                                      ▼
+                               Other GoRedis Nodes
 ```
 
 ## Comparison with Redis
@@ -173,7 +172,7 @@ go test ./src/... -v -cover
 redis-benchmark -p 6379 -t SET,GET -q
 ```
 
-## Project Structure
+<!-- ## Project Structure
 
 ```
 .
@@ -192,7 +191,7 @@ redis-benchmark -p 6379 -t SET,GET -q
 ├── .github/workflows/   # CI pipeline
 ├── go.mod
 └── README.md
-```
+``` -->
 
 <!-- ## Roadmap
 
@@ -203,7 +202,3 @@ redis-benchmark -p 6379 -t SET,GET -q
 - [ ] RDB persistence (snapshot to disk)
 - [ ] Pub/Sub messaging
 - [ ] MULTI/EXEC transactions -->
-
-## License
-
-[MIT](LICENSE)
